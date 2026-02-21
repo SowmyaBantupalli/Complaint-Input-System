@@ -15,8 +15,9 @@ export default function App() {
   return (
     <div className="app-shell">
       <header>
+        <div className="eyebrow">AI-Powered System</div>
         <h1>Complaint Analyzer</h1>
-        <p>Tell us what happened and get a quick crime summary.</p>
+        <p>AI-based legal complaint analysis with BNS section classification</p>
       </header>
 
       {/* Complaint input form - handles user input and API calls */}

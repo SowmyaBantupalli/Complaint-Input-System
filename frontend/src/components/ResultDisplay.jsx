@@ -5,10 +5,10 @@ export default function ResultDisplay({ data }) {
 
   return (
     <div className="result-card">
-      <h2>Analysis result</h2>
+      <h2>Analysis Result</h2>
       <div className="result-grid">
         <div>
-          <p className="label">Crime type</p>
+          <p className="label">Crime Type</p>
           <p className="value">{crime_type}</p>
         </div>
         <div>
@@ -16,15 +16,15 @@ export default function ResultDisplay({ data }) {
           <p className="value">{time}</p>
         </div>
         <div>
-          <p className="label">Section</p>
+          <p className="label">Legal Section</p>
           <p className="value">{predicted_section}</p>
         </div>
       </div>
-      <p className="summary">{summary}</p>
+      <div className="summary">{summary}</div>
       {special_note && (
-        <p className="special-note" style={{ marginTop: '1rem', padding: '0.75rem', backgroundColor: '#fff3cd', borderRadius: '8px', fontSize: '0.9rem' }}>
-          <strong>Note:</strong> {special_note}
-        </p>
+        <div className="special-note">
+          <strong>Special Note:</strong> {special_note}
+        </div>
       )}
     </div>
   );
