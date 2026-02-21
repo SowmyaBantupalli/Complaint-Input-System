@@ -328,6 +328,30 @@ button:disabled {
   margin-top: var(--spacing-xs);
 }
 
+.key-event {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md);
+  background: linear-gradient(135deg, #e0e7ff, #c7d2fe);
+  border-radius: 12px;
+  border-left: 4px solid var(--primary-600);
+}
+
+.key-event .label {
+  margin-bottom: var(--spacing-xs);
+}
+
+.event-text {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--gray-800);
+  line-height: 1.5;
+}
+
+.event-text::before {
+  content: '🔍 ';
+  font-size: 1.2rem;
+}
+
 .summary {
   margin-top: var(--spacing-lg);
   padding: var(--spacing-md);

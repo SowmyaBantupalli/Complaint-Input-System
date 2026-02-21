@@ -68,16 +68,75 @@ def analyze_complaint(text: str) -> dict:
     time_match = re.search(r"\b\d{1,2}\s*(?:am|pm|AM|PM)\b", text)
     time = time_match.group(0) if time_match else "Not provided"
 
-    # Step 3: Generate summary (first 100 characters)
-    summary = (text.strip()[:100]).rstrip()
+    # Step 3: Location Extraction using keyword-based approach
+    # Look for location indicators like "at", "near", "in", "on" followed by place names
+    location = "Not specified"
+    location_patterns = [
+        r"(?:at|near|in|on|from|around)\s+(?:the\s+)?([A-Z][a-zA-Z\s]+?)(?:\s+at|\s+near|\.|,|$)",
+        r"(?:at|near|in|on)\s+([a-z]+(?:\s+[a-z]+){0,3})",
+    ]
+    for pattern in location_patterns:
+        loc_match = re.search(pattern, text, re.IGNORECASE)
+        if loc_match:
+            location = loc_match.group(1).strip()
+            break
+    
+    # Step 4: Persons Involved using simple name pattern matching
+    # Look for capitalized names or person descriptors
+    persons = []
+    # Pattern for capitalized names (e.g., "John Smith", "Maria")
+    name_pattern = r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
+    name_matches = re.findall(name_pattern, text)
+    # Filter out common words and location keywords
+    common_words = {"Someone", "The", "At", "Near", "In", "On", "PM", "AM", "Section"}
+    persons = [name for name in name_matches if name not in common_words][:3]  # Limit to 3 names
+    
+    # Also check for person descriptors
+    descriptor_pattern = r"\b(suspect|victim|witness|accused|man|woman|person|individual|perpetrator)\b"
+    descriptors = re.findall(descriptor_pattern, lowered)
+    
+    if persons:
+        persons_involved = ", ".join(persons)
+    elif descriptors:
+        persons_involved = descriptors[0].capitalize()
+    else:
+        persons_involved = "Not mentioned"
 
-    # Step 4: Call Module 4 to get BNS legal section
+    # Step 5: Key Event Extraction - identify main action
+    # Look for action verbs and their context
+    key_event = "Not identified"
+    event_patterns = [
+        r"(stole\s+(?:my|a|the)\s+\w+)",
+        r"(threatened\s+(?:me|us|to|with)\s+[\w\s]+)",
+        r"(assaulted\s+(?:me|us|someone))",
+        r"(broke\s+(?:into|the|my)\s+\w+)",
+        r"(attacked\s+(?:me|us|someone))",
+    ]
+    for pattern in event_patterns:
+        event_match = re.search(pattern, lowered)
+        if event_match:
+            key_event = event_match.group(1).capitalize()
+            break
+    
+    # If no specific pattern, extract first sentence as key event
+    if key_event == "Not identified":
+        first_sentence = re.split(r'[.!?]', text)[0].strip()
+        if len(first_sentence) > 10:
+            key_event = first_sentence[:80] + "..." if len(first_sentence) > 80 else first_sentence
+
+    # Step 6: Generate summary (first 150 characters)
+    summary = (text.strip()[:150]).rstrip()
+
+    # Step 7: Call Module 4 to get BNS legal section
     predicted_section, special_note = classify_legal_section(crime_type, summary)
 
     # Return structured JSON response
     return {
         "crime_type": crime_type,
+        "location": location,
         "time": time,
+        "persons_involved": persons_involved,
+        "key_event": key_event,
         "summary": summary,
         "predicted_section": predicted_section,
         "special_note": special_note,
