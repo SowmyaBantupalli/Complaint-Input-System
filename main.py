@@ -71,36 +71,62 @@ def analyze_complaint(text: str) -> dict:
     # Step 3: Location Extraction using keyword-based approach
     # Look for location indicators like "at", "near", "in", "on" followed by place names
     location = "Not specified"
+    
+    # Try multiple patterns for location extraction
     location_patterns = [
-        r"(?:at|near|in|on|from|around)\s+(?:the\s+)?([A-Z][a-zA-Z\s]+?)(?:\s+at|\s+near|\.|,|$)",
-        r"(?:at|near|in|on)\s+([a-z]+(?:\s+[a-z]+){0,3})",
+        r"(?:at|near|in|on|from|around|outside|inside)\s+(?:the\s+)?([a-zA-Z0-9\s]+?(?:park|street|road|avenue|mall|store|shop|building|station|market|center|campus|school|college|temple|mosque|church|hospital))",
+        r"(?:at|near|in|on)\s+(?:the\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})",
+        r"(?:at|near|in|on)\s+([a-z]+\s+[a-z]+)",
     ]
+    
     for pattern in location_patterns:
         loc_match = re.search(pattern, text, re.IGNORECASE)
         if loc_match:
-            location = loc_match.group(1).strip()
-            break
+            found_location = loc_match.group(1).strip()
+            # Clean up and validate
+            if len(found_location) > 2 and len(found_location) < 50:
+                location = found_location.title()
+                break
     
-    # Step 4: Persons Involved using simple name pattern matching
-    # Look for capitalized names or person descriptors
-    persons = []
-    # Pattern for capitalized names (e.g., "John Smith", "Maria")
-    name_pattern = r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b"
-    name_matches = re.findall(name_pattern, text)
-    # Filter out common words and location keywords
-    common_words = {"Someone", "The", "At", "Near", "In", "On", "PM", "AM", "Section"}
-    persons = [name for name in name_matches if name not in common_words][:3]  # Limit to 3 names
+    # Step 4: Persons Involved - Extract names or person descriptors
+    persons_involved = "Not mentioned"
     
-    # Also check for person descriptors
-    descriptor_pattern = r"\b(suspect|victim|witness|accused|man|woman|person|individual|perpetrator)\b"
-    descriptors = re.findall(descriptor_pattern, lowered)
+    # First, check for person descriptors (suspect, victim, etc.)
+    descriptor_pattern = r"\b(suspect|victim|witness|accused|attacker|perpetrator|thief|criminal)\b"
+    descriptor_match = re.search(descriptor_pattern, lowered)
     
-    if persons:
-        persons_involved = ", ".join(persons)
-    elif descriptors:
-        persons_involved = descriptors[0].capitalize()
+    if descriptor_match:
+        persons_involved = descriptor_match.group(1).capitalize()
     else:
-        persons_involved = "Not mentioned"
+        # Look for capitalized proper names (2-3 word names)
+        name_pattern = r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})\b"
+        name_matches = re.findall(name_pattern, text)
+        
+        # Filter out common words that aren't names
+        excluded_words = {
+            "Someone", "Something", "Anyone", "The", "This", "That", "These", "Those",
+            "What", "When", "Where", "Which", "Who", "Why", "How",
+            "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
+            "January", "February", "March", "April", "May", "June", "July", "August", 
+            "September", "October", "November", "December",
+            "Police", "Section", "Complaint", "Officer"
+        }
+        
+        valid_names = []
+        for name in name_matches:
+            words = name.split()
+            # Check if any word in the name is in excluded list
+            if not any(word in excluded_words for word in words):
+                # Verify it's not a common word by checking length and structure
+                if len(name) >= 3 and len(words) <= 3:
+                    valid_names.append(name)
+        
+        if valid_names:
+            # Take up to 2 most unique names
+            unique_names = list(dict.fromkeys(valid_names))[:2]
+            persons_involved = ", ".join(unique_names)
+        elif "someone" in lowered or "somebody" in lowered:
+            persons_involved = "Unknown person"
 
     # Step 5: Key Event Extraction - identify main action
     # Look for action verbs and their context
