@@ -62,17 +62,27 @@ npm install
 ## Deployment
 ### Backend (Render/Railway/Fly.io)
 1. Deploy `main.py` to a Python hosting service (Render, Railway, or Fly.io)
-2. Note the deployed backend URL (e.g., `https://your-api.onrender.com`)
+2. Set the start command to: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+3. Note the deployed backend URL (e.g., `https://your-api.onrender.com`)
 
 ### Frontend (Vercel)
-1. Create a new Vercel project from your repository
-2. Set **Root Directory** to `frontend`
-3. Set **Build Command** to `npm run build`
-4. Set **Output Directory** to `dist`
-5. Add environment variable: `VITE_BACKEND_URL` = your backend URL
-6. Deploy
+1. Go to [Vercel](https://vercel.com) and create new project
+2. Import your GitHub repository
+3. Configure project settings:
+   - **Framework Preset**: Vite
+   - **Root Directory**: `frontend`
+   - **Build Command**: `npm run build`
+   - **Output Directory**: `dist`
+   - **Install Command**: `npm install`
+   - **Node Version**: 18.x (auto-detected from .nvmrc)
+4. Add environment variable:
+   - Name: `VITE_BACKEND_URL`
+   - Value: Your backend URL (e.g., `https://your-api.onrender.com`)
+5. Click "Deploy"
 
 Your frontend will be available at the Vercel URL (e.g., `https://complaint-app.vercel.app`)
+
+**Note**: The frontend folder includes `vercel.json` and `.nvmrc` for automatic configuration.
 
 ## Sample Input and Output
 **Input (text form data):**
