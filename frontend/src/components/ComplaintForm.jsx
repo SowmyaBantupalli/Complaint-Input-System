@@ -1,9 +1,13 @@
 import { useState } from "react";
 
+// MODULE 1: Complaint Input Form Component
+// Handles user input (text or image) and sends to backend API
 export default function ComplaintForm({ onStart, onResult, onError }) {
+  // State management for form inputs
   const [complaint, setComplaint] = useState("");
   const [file, setFile] = useState(null);
 
+  // Build multipart/form-data for backend submission
   const buildFormData = () => {
     const formData = new FormData();
     if (complaint) {
@@ -15,29 +19,40 @@ export default function ComplaintForm({ onStart, onResult, onError }) {
     return formData;
   };
 
+  // Form submission handler - calls backend API
   const handleSubmit = async (event) => {
     event.preventDefault();
+    
+    // Validation: ensure at least one input is provided
     if (!complaint && !file) {
       onError("Write a complaint or upload an image before submitting.");
       return;
     }
 
-    onStart();
+    onStart();  // Notify parent component that submission started
+
+    // Get backend URL from environment variable or use localhost for dev
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
 
     try {
-      const response = await fetch("http://localhost:8000/analyze", {
+      // Send POST request with FormData to backend /analyze endpoint
+      const response = await fetch(`${backendUrl}/analyze`, {
         method: "POST",
         body: buildFormData(),
       });
 
+      // Parse JSON response
       const payload = await response.json();
 
+      // Check for errors
       if (!response.ok) {
         throw new Error(payload.detail || "Unable to analyze right now.");
       }
 
+      // Success: pass result to parent component
       onResult(payload);
     } catch (err) {
+      // Handle errors (network issues, backend errors, etc.)
       onError(err.message);
     }
   };

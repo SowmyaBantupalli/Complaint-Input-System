@@ -59,6 +59,21 @@ npm install
    ```
 3. Open `http://localhost:5173/`, enter a complaint or upload an image, and submit.
 
+## Deployment
+### Backend (Render/Railway/Fly.io)
+1. Deploy `main.py` to a Python hosting service (Render, Railway, or Fly.io)
+2. Note the deployed backend URL (e.g., `https://your-api.onrender.com`)
+
+### Frontend (Vercel)
+1. Create a new Vercel project from your repository
+2. Set **Root Directory** to `frontend`
+3. Set **Build Command** to `npm run build`
+4. Set **Output Directory** to `dist`
+5. Add environment variable: `VITE_BACKEND_URL` = your backend URL
+6. Deploy
+
+Your frontend will be available at the Vercel URL (e.g., `https://complaint-app.vercel.app`)
+
 ## Sample Input and Output
 **Input (text form data):**
 ```
