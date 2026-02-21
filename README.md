@@ -71,10 +71,9 @@ npm install
 3. Configure project settings:
    - **Framework Preset**: Vite
    - **Root Directory**: `frontend`
-   - **Build Command**: `npm run build`
+   - **Build Command**: Leave default or set to `npm run build`
    - **Output Directory**: `dist`
-   - **Install Command**: `npm install`
-   - **Node Version**: 18.x (auto-detected from .nvmrc)
+   - **Install Command**: Leave default or set to `npm install`
 4. Add environment variable:
    - Name: `VITE_BACKEND_URL`
    - Value: Your backend URL (e.g., `https://your-api.onrender.com`)
@@ -82,7 +81,7 @@ npm install
 
 Your frontend will be available at the Vercel URL (e.g., `https://complaint-app.vercel.app`)
 
-**Note**: The frontend folder includes `vercel.json` and `.nvmrc` for automatic configuration.
+**Troubleshooting**: If build fails, ensure Root Directory is set to `frontend` (not blank or root).
 
 ## Sample Input and Output
 **Input (text form data):**
