@@ -13,6 +13,27 @@ app.add_middleware(
 )
 
 
+def classify_legal_section(crime_type: str, summary: str) -> tuple[str, str | None]:
+    # Base mapping keeps the classification simple and easy to explain.
+    law_map = {
+        "Theft": "BNS Section 303",
+        "Threat": "BNS Section 351",
+        "Assault": "BNS Section 115",
+    }
+
+    lowered_summary = summary.lower()
+    # Escalate when a weapon is mentioned, rule-based without ML.
+    if "weapon" in lowered_summary or "knife" in lowered_summary:
+        return "Aggravated Assault – BNS Section 118", "Weapon reference escalates the charge."
+
+    note = None
+    if "minor" in lowered_summary and "theft" in lowered_summary:
+        note = "Minor theft noted; monitor for follow-up."
+
+    predicted_section = law_map.get(crime_type, "Section Not Found")
+    return predicted_section, note
+
+
 def analyze_complaint(text: str) -> dict:
     lowered = text.lower()
     if "theft" in lowered or "stole" in lowered:
@@ -29,18 +50,14 @@ def analyze_complaint(text: str) -> dict:
 
     summary = (text.strip()[:100]).rstrip()
 
-    section_map = {
-        "Theft": "BNS Section 303",
-        "Threat": "BNS Section 351",
-        "Assault": "BNS Section 115",
-    }
-    predicted_section = section_map.get(crime_type, "Not assigned")
+    predicted_section, special_note = classify_legal_section(crime_type, summary)
 
     return {
         "crime_type": crime_type,
         "time": time,
         "summary": summary,
         "predicted_section": predicted_section,
+        "special_note": special_note,
     }
 
 
