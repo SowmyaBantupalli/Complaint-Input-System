@@ -15,7 +15,6 @@ export default function App() {
   return (
     <div className="app-shell">
       <header>
-        <p className="eyebrow">College Demo</p>
         <h1>Complaint Analyzer</h1>
         <p>Tell us what happened and get a quick crime summary.</p>
       </header>
