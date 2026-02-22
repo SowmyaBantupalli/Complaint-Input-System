@@ -357,12 +357,36 @@ OUTPUT FORMAT:
                         found_loc = re.sub(r'\s+', ' ', found_loc)
                         if len(found_loc) > 3 and len(found_loc) < 100:
                             location = found_loc
-                for pattern in date_patterns:
+        
+        # Date extraction
+        date = "Not Specified"
+        date_patterns = [
+            r"(?:Date|date|DATE):\s*(\d{1,2}\s+[A-Za-z]+\s+\d{4})",
+            r"on\s+(\d{1,2}\s+[A-Za-z]+\s+\d{4})",
+            r"(\d{1,2}/\d{1,2}/\d{4})"
+        ]
+        
+        for pattern in date_patterns:
             date_match = re.search(pattern, text, re.IGNORECASE)
             if date_match:
                 date = date_match.group(1)
                 break
-         with injury details
+        
+        # Time extraction
+        time = "Not Specified"
+        time_patterns = [
+            r"(?:at|around)\s+(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))",
+            r"(?:at|around)\s+(\d{1,2}\s*(?:AM|PM|am|pm))",
+            r"(\d{1,2}:\d{2})"
+        ]
+        
+        for pattern in time_patterns:
+            time_match = re.search(pattern, text, re.IGNORECASE)
+            if time_match:
+                time = time_match.group(1)
+                break
+        
+        # Key event summary with injury details
         key_event_summary = ""
         if crime_type == "Theft":
             key_event_summary = f"Theft of {stolen_item}"
@@ -393,18 +417,7 @@ OUTPUT FORMAT:
         additional_notes = "⚠️ Basic rule-based classification (Gemini AI not configured). "
         if crime_type == "Grievous Hurt":
             additional_notes += "Serious bodily injury - medical attention required. Escalate immediately. "
-        el    r"(?:in|at)\s+([A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+)"
-        ]
-        
-        for pattern in location_patterns:
-            loc_match = re.search(pattern, text)
-            if loc_match:
-                found_loc = loc_match.group(1).strip()
-                # Clean up location
-                found_loc = re.sub(r'\s+', ' ', found_loc)
-                if len(found_loc) > 3 and len(found_loc) < 100:
-                    location = found_loc
-                    break
+        additional_notes += "For more accurate extraction, configure GEMINI_API_KEY environment variable."
         
         # Enhanced person extraction
         persons_involved = "Not Specified"
