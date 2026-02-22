@@ -68,15 +68,24 @@ pip install -r requirements.txt
 
 #### 2. Install Tesseract OCR Engine
 
-**Windows:**
-```bash
-# Download installer from: https://github.com/UB-Mannheim/tesseract/wiki
-# Or use chocolatey:
+**⚠️ IMPORTANT**: You must install Tesseract system package for OCR to work!
+
+**Windows (Quick Setup):**
+```powershell
+# Option 1: Using Chocolatey (Recommended - easiest)
 choco install tesseract
 
-# Add Tesseract to PATH or set in code:
-# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+# Option 2: Manual installation
+# Download from: https://github.com/UB-Mannheim/tesseract/wiki
+# Choose: tesseract-ocr-w64-setup-5.x.x.exe
+# Run installer and select "Add to PATH"
+# Restart your terminal after installation
+
+# Verify installation:
+tesseract --version
 ```
+
+📖 **Having issues on Windows?** See detailed guide: [TESSERACT_INSTALL.md](TESSERACT_INSTALL.md)
 
 **Linux/Ubuntu:**
 ```bash
@@ -87,6 +96,14 @@ sudo apt-get install tesseract-ocr tesseract-ocr-eng libtesseract-dev
 **macOS:**
 ```bash
 brew install tesseract
+```
+
+#### 3. Verify Installation
+```bash
+# Test Tesseract installation
+python test_tesseract.py
+
+# Should show: ✓ ALL TESTS PASSED!
 ```
 
 ### Frontend setup

@@ -10,8 +10,29 @@ import cv2
 import numpy as np
 from PIL import Image, ImageEnhance
 import io
+import os
+import platform
 
 app = FastAPI(title="Complaint Analyzer Demo")
+
+# Configure Tesseract path for different environments
+# This handles Windows installations where Tesseract may not be in PATH
+if platform.system() == "Windows":
+    # Common Windows installation paths
+    possible_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\Users\{}\AppData\Local\Tesseract-OCR\tesseract.exe".format(os.getenv("USERNAME", "")),
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.tesseract_cmd = path
+            print(f"Tesseract found at: {path}")
+            break
+else:
+    # On Linux/Render, Tesseract should be in PATH via Aptfile
+    print("Running on Linux - Tesseract should be installed via Aptfile")
 
 # Enable CORS to allow frontend (on different domain) to call this API
 app.add_middleware(
