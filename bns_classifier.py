@@ -136,24 +136,28 @@ COMPLAINT TEXT:
 {complaint_text}
 
 TASK:
-Analyze the complaint and extract the following information in strict JSON format:
+Analyze the complaint THOROUGHLY and extract ALL mentioned information in strict JSON format:
 
-1. **crime_type**: Primary crime category (e.g., Theft, Assault, Threat, Harassment, Fraud, etc.)
-2. **location**: Location where incident occurred (if mentioned, otherwise "Not Specified")
-3. **date**: Date of incident (if mentioned, otherwise "Not Specified")
-4. **time**: Time of incident (if mentioned, otherwise "Not Specified")
-5. **persons_involved**: Names or descriptions of accused/victim/witnesses (if mentioned, otherwise "Not Specified")
-6. **key_event_summary**: Concise 2-3 sentence summary of what happened
-7. **bns_sections**: Array of applicable BNS section numbers with reasons (e.g., [{{"section": "303", "reason": "Theft offense"}}])
-8. **severity**: Low/Medium/High based on nature of crime
-9. **additional_notes**: Any important observations or escalation flags
+1. **crime_type**: Primary crime category (Theft, Assault, Threat, Harassment, Fraud, Murder, Rape, Kidnapping, etc.)
+2. **location**: FULL location details - include area names, landmarks, cities, addresses, building names (e.g., "Andheri East, Mumbai" or "outside apartment in Andheri East")
+3. **date**: Complete date if mentioned (e.g., "5 January 2026", "yesterday", "last week")
+4. **time**: Exact time if mentioned (e.g., "8:30 PM", "around 8:30 PM")
+5. **persons_involved**: ALL names mentioned - victim, accused, witnesses, complainant (e.g., "Ramesh Sharma (victim)", "Unknown accused")
+6. **key_event_summary**: Clear 2-3 sentence summary including WHAT was stolen/damaged, WHO was involved, WHERE it happened
+7. **bns_sections**: Applicable BNS sections with reasons (format: [{{"section": "303", "reason": "Theft of motor vehicle"}}])
+8. **severity**: Low/Medium/High based on crime nature and value
+9. **additional_notes**: Important observations, item stolen, estimated value, escalation flags
 
-RULES:
-- Do NOT hallucinate or invent information not present in the complaint
-- If information is not mentioned, use "Not Specified"
-- Match crimes to appropriate BNS sections based on the dataset provided
-- Be precise and factual
-- Output ONLY valid JSON, no additional text
+EXTRACTION RULES:
+- Extract EVERY location mentioned (areas, cities, landmarks, building names)
+- Extract EVERY person name mentioned (victim, accused, witnesses)
+- Extract specific items stolen or damaged
+- If complaint says "Name: John Doe" - that's the complainant/victim
+- "yesterday", "last night" counts as date information
+- Include area names like "Andheri East", "Mumbai" in location
+- Do NOT write "Not Specified" if information IS present in the text
+- Only use "Not Specified" for truly missing information
+- Be THOROUGH - read the entire complaint carefully
 
 OUTPUT FORMAT:
 ```json
@@ -214,62 +218,158 @@ OUTPUT FORMAT:
     
     def _fallback_classification(self, text: str) -> Dict:
         """
-        Simple rule-based fallback when Gemini is unavailable
+        Enhanced rule-based fallback when Gemini is unavailable
         """
         import re
         
         lowered = text.lower()
         
-        # Crime type detection
-        if "theft" in lowered or "stole" in lowered or "stolen" in lowered:
+        # Crime type detection with item stolen
+        stolen_item = "property"
+        if "motorcycle" in lowered or "bike" in lowered or "two wheeler" in lowered:
             crime_type = "Theft"
-            predicted_section = "BNS Section 303 - Theft"
+            stolen_item = "motorcycle"
+            predicted_section = "BNS Section 303 - Theft of Motor Vehicle"
+            severity = "High"
+        elif "theft" in lowered or "stole" in lowered or "stolen" in lowered:
+            crime_type = "Theft"
+            # Try to identify what was stolen
+            if "phone" in lowered or "mobile" in lowered:
+                stolen_item = "mobile phone"
+            elif "wallet" in lowered or "purse" in lowered:
+                stolen_item = "wallet"
+            elif "car" in lowered or "vehicle" in lowered:
+                stolen_item = "vehicle"
+            predicted_section = f"BNS Section 303 - Theft of {stolen_item}"
+            severity = "Medium" if stolen_item in ["wallet", "mobile phone"] else "High"
         elif "assault" in lowered or "attacked" in lowered or "hit" in lowered:
             crime_type = "Assault"
             predicted_section = "BNS Section 115 - Assault"
+            severity = "High"
         elif "threat" in lowered or "threatened" in lowered:
             crime_type = "Threat"
             predicted_section = "BNS Section 351 - Criminal Intimidation"
+            severity = "Medium"
         elif "fraud" in lowered or "cheat" in lowered or "scam" in lowered:
             crime_type = "Fraud"
             predicted_section = "BNS Section 316 - Cheating"
+            severity = "Medium"
         elif "harassment" in lowered or "harass" in lowered:
             crime_type = "Harassment"
             predicted_section = "BNS Section 78 - Criminal Harassment"
+            severity = "Medium"
         else:
             crime_type = "Unknown"
             predicted_section = "Section not determined - requires further review"
+            severity = "Medium"
         
-        # Time extraction
-        time_match = re.search(r"\b\d{1,2}[:.]?\d{0,2}\s*(?:am|pm|AM|PM|hours|hrs)\b", text)
-        time = time_match.group(0) if time_match else "Not Specified"
+        # Enhanced time extraction
+        time_patterns = [
+            r"\b(\d{1,2}:\d{2}\s*(?:am|pm|AM|PM))\b",
+            r"\b(around\s+\d{1,2}:\d{2}\s*(?:am|pm|AM|PM))\b",
+            r"\b(\d{1,2}\s*(?:am|pm|AM|PM))\b"
+        ]
+        time = "Not Specified"
+        for pattern in time_patterns:
+            time_match = re.search(pattern, text, re.IGNORECASE)
+            if time_match:
+                time = time_match.group(1)
+                break
         
-        # Date extraction
-        date_match = re.search(r"\b\d{1,2}[-/]\d{1,2}[-/]\d{2,4}\b|\b(?:yesterday|today|last night|last week)\b", text, re.IGNORECASE)
-        date = date_match.group(0) if date_match else "Not Specified"
+        # Enhanced date extraction
+        date_patterns = [
+            r"(?:Date:\s*)?(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})",
+            r"(?:Date:\s*)?(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
+            r"\b(yesterday|today|last night|last week|last month)\b"
+        ]
+        date = "Not Specified"
+        for pattern in date_patterns:
+            date_match = re.search(pattern, text, re.IGNORECASE)
+            if date_match:
+                date = date_match.group(1)
+                break
         
-        # Location extraction
+        # Enhanced location extraction - multiple patterns
         location = "Not Specified"
-        location_pattern = r"(?:at|near|in|on)\s+(?:the\s+)?([a-zA-Z0-9\s]+?(?:park|street|road|market|mall|shop|store|building|station))"
-        loc_match = re.search(location_pattern, text, re.IGNORECASE)
-        if loc_match:
-            location = loc_match.group(1).strip().title()
+        location_patterns = [
+            # Pattern 1: City/Area names (Andheri East, Mumbai)
+            r"(?:in|at|near|outside|from)\s+(?:my\s+)?(?:apartment\s+in\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*,\s*[A-Z][a-zA-Z]+)",
+            # Pattern 2: Area with landmarks
+            r"(?:in|at|near|outside)\s+(?:my\s+)?(?:apartment|house|home)\s+(?:in|at)\s+([A-Z][a-zA-Z\s]+(?:East|West|North|South)?(?:,\s*[A-Z][a-zA-Z]+)?)",
+            # Pattern 3: Outside/near apartment in [location]
+            r"(?:outside|near)\s+(?:my\s+)?apartment\s+in\s+([A-Z][a-zA-Z\s,]+)",
+            # Pattern 4: Common places
+            r"(?:at|near|in|on|from|outside)\s+(?:the\s+)?([a-zA-Z0-9\s]+?(?:park|street|road|market|mall|shop|store|building|station|gate|area|colony|complex))",
+            # Pattern 5: General area names
+            r"(?:in|at)\s+([A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+)"
+        ]
         
-        # Summary
+        for pattern in location_patterns:
+            loc_match = re.search(pattern, text)
+            if loc_match:
+                found_loc = loc_match.group(1).strip()
+                # Clean up location
+                found_loc = re.sub(r'\s+', ' ', found_loc)
+                if len(found_loc) > 3 and len(found_loc) < 100:
+                    location = found_loc
+                    break
+        
+        # Enhanced person extraction
+        persons_involved = "Not Specified"
+        person_patterns = [
+            # Pattern 1: "Name: [Name]"
+            r"Name:\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)",
+            # Pattern 2: Direct names in text
+            r"\b([A-Z][a-z]{2,}\s+[A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,})?)\b"
+        ]
+        
+        for pattern in person_patterns:
+            person_match = re.search(pattern, text)
+            if person_match:
+                name = person_match.group(1).strip()
+                # Exclude common non-name words
+                excluded = {"Not Specified", "January February", "Mumbai Police"}
+                if name not in excluded and len(name.split()) <= 4:
+                    persons_involved = f"{name} (Complainant/Victim)"
+                    break
+        
+        # If still not found, check for descriptors
+        if persons_involved == "Not Specified":
+            if "suspect" in lowered or "accused" in lowered:
+                persons_involved = "Unknown accused"
+            elif "someone" in lowered or "somebody" in lowered:
+                persons_involved = "Unknown person"
+        
+        # Enhanced summary
+        key_event_summary = f"{crime_type} of {stolen_item}" if crime_type == "Theft" else f"{crime_type} incident"
+        if location != "Not Specified":
+            key_event_summary += f" at {location}"
+        if date != "Not Specified":
+            key_event_summary += f" on {date}"
+        if time != "Not Specified":
+            key_event_summary += f" at {time}"
+        
+        # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
+        
+        additional_notes = "⚠️ Basic rule-based classification (Gemini AI not configured). "
+        if crime_type == "Theft" and stolen_item == "motorcycle":
+            additional_notes += "High-value item stolen - escalate to senior officer. "
+        additional_notes += "For more accurate extraction, configure GEMINI_API_KEY environment variable."
         
         return {
             "crime_type": crime_type,
             "location": location,
             "date": date,
             "time": time,
-            "persons_involved": "Not Specified",
-            "key_event_summary": summary,
+            "persons_involved": persons_involved,
+            "key_event_summary": key_event_summary,
             "predicted_section": predicted_section,
-            "severity": "Medium",
-            "additional_notes": "⚠️ Basic rule-based classification (Gemini AI not configured)",
+            "severity": severity,
+            "additional_notes": additional_notes,
             "ai_classification": False,
-            "bns_sections": []
+            "bns_sections": [{"section": predicted_section.split()[2] if "Section" in predicted_section else "N/A", 
+                             "reason": crime_type}]
         }
     
     def get_section_details(self, section_number: str) -> Optional[Dict]:
