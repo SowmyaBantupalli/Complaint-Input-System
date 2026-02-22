@@ -1,10 +1,15 @@
 # AI-Based Complaint Management System - Backend
 # This FastAPI application provides a rule-based NLP system for complaint analysis
-# No ML models or external APIs are used - purely dictionary and regex based
+# Uses EasyOCR for handwritten complaint digitization
 
 from fastapi import FastAPI, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import re
+import easyocr
+import cv2
+import numpy as np
+from PIL import Image, ImageEnhance
+import io
 
 app = FastAPI(title="Complaint Analyzer Demo")
 
@@ -16,6 +21,102 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize EasyOCR reader globally (loads once at startup)
+# Using English language - add more languages if needed: ['en', 'hi', 'te']
+print("Loading EasyOCR model... This may take a minute on first run.")
+reader = easyocr.Reader(['en'], gpu=False)  # Set gpu=True if GPU available
+print("EasyOCR model loaded successfully!")
+
+
+# MODULE 2: Image Preprocessing for OCR
+# Enhances image quality for better text extraction
+def preprocess_image(image_bytes: bytes) -> np.ndarray:
+    """
+    Preprocesses uploaded image to improve OCR accuracy:
+    1. Convert to grayscale
+    2. Remove noise using bilateral filter
+    3. Enhance contrast
+    4. Apply adaptive thresholding for better text clarity
+    
+    Args:
+        image_bytes: Raw image file bytes
+    
+    Returns:
+        Preprocessed image as numpy array
+    """
+    # Convert bytes to PIL Image
+    pil_image = Image.open(io.BytesIO(image_bytes))
+    
+    # Enhance contrast using PIL
+    enhancer = ImageEnhance.Contrast(pil_image)
+    pil_image = enhancer.enhance(2.0)  # Increase contrast by 2x
+    
+    # Convert PIL image to numpy array for OpenCV processing
+    img_array = np.array(pil_image)
+    
+    # Convert to grayscale if image is in color
+    if len(img_array.shape) == 3:
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+    else:
+        gray = img_array
+    
+    # Apply bilateral filter to remove noise while preserving edges
+    # This is crucial for handwritten text
+    denoised = cv2.bilateralFilter(gray, 9, 75, 75)
+    
+    # Apply adaptive thresholding to make text stand out
+    # This converts image to black and white, making text clearer
+    thresh = cv2.adaptiveThreshold(
+        denoised, 255, 
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+        cv2.THRESH_BINARY, 
+        11, 2
+    )
+    
+    return thresh
+
+
+# MODULE 2: OCR Text Extraction
+# Extracts text from preprocessed image using EasyOCR
+def extract_text_from_image(image_bytes: bytes) -> str:
+    """
+    Extracts text from handwritten complaint image using EasyOCR.
+    
+    Process:
+    1. Preprocess image (noise removal, contrast enhancement)
+    2. Run EasyOCR to detect and extract text
+    3. Combine all detected text into a single string
+    
+    Args:
+        image_bytes: Raw image file bytes
+    
+    Returns:
+        Extracted text string
+    """
+    try:
+        # Preprocess the image for better OCR accuracy
+        preprocessed_img = preprocess_image(image_bytes)
+        
+        # Use EasyOCR to extract text
+        # reader.readtext returns list of (bbox, text, confidence)
+        results = reader.readtext(preprocessed_img)
+        
+        # Extract only the text parts and join them
+        # Each result is a tuple: (bounding_box, text, confidence)
+        extracted_texts = [text for (bbox, text, confidence) in results if confidence > 0.3]
+        
+        # Join all text pieces with space
+        full_text = " ".join(extracted_texts)
+        
+        # Clean up extra spaces
+        full_text = " ".join(full_text.split())
+        
+        return full_text if full_text.strip() else "No text detected in image"
+        
+    except Exception as e:
+        print(f"OCR Error: {str(e)}")
+        return f"Error processing image: {str(e)}"
 
 
 # MODULE 4: Legal Section (BNS/BNSS) Classification
@@ -170,23 +271,53 @@ def analyze_complaint(text: str) -> dict:
 
 
 # MODULE 1 & 2: Complaint Input Endpoint
-# Accepts either text input or image upload (image uses mock OCR)
+# Accepts either text input or image upload with real OCR processing
 @app.post("/analyze")
 async def handle_analyze(
     complaint: str = Form(None),  # Optional text input
     image: UploadFile | None = File(None),  # Optional image file
 ):
-    # MODULE 2: Mock OCR - In real system, this would use OCR library
-    # For demo purposes, we return a fixed sample text when image is uploaded
+    # MODULE 2: Real OCR Implementation
     if image:
-        text_to_analyze = "Someone stole my bike near the park at 8 PM"
+        # Read image file bytes
+        image_bytes = await image.read()
+        
+        # Validate image file
+        if not image.content_type or not image.content_type.startswith('image/'):
+            return {
+                "status": "error",
+                "detail": "Invalid file type. Please upload an image file."
+            }
+        
+        # Extract text using OCR with preprocessing
+        text_to_analyze = extract_text_from_image(image_bytes)
+        
+        # Check if OCR successfully extracted text
+        if text_to_analyze.startswith("Error") or text_to_analyze == "No text detected in image":
+            return {
+                "status": "error",
+                "detail": text_to_analyze
+            }
+        
+        # If extracted text is too short, it might be a bad scan
+        if len(text_to_analyze.strip()) < 10:
+            return {
+                "status": "error",
+                "detail": "Could not extract enough text from image. Please ensure the image is clear and contains readable text."
+            }
+            
     elif complaint:
         text_to_analyze = complaint
     else:
-        return {"status": "bad_request", "detail": "Provide complaint text or image."}
+        return {"status": "error", "detail": "Provide complaint text or image."}
 
     # Call Module 3 to analyze the complaint
     analysis = analyze_complaint(text_to_analyze)
     
     # Return success status with analysis results
-    return {"status": "ok", **analysis}
+    # Include extracted_text field to show what OCR detected
+    return {
+        "status": "ok",
+        "extracted_text": text_to_analyze if image else None,
+        **analysis
+    }

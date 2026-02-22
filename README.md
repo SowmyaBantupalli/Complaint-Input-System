@@ -1,23 +1,33 @@
 # AI-Based Complaint Management System
 
 ## Project Overview
-This is a demo-ready complaint intake platform built for academic purposes. Users submit either text or an image to describe an incident, and the backend analyzes the content with simple rule-based logic to surface the crime type, time, summary, and the corresponding BNS legal section.
+This is a production-ready complaint intake platform built for academic purposes. Users submit either text or an image (handwritten or printed) to describe an incident, and the backend analyzes the content with OCR and rule-based NLP to extract the crime type, location, time, persons involved, and the corresponding BNS legal section.
 
 ## Features
-- Accepts complaint text or optional image uploads (image path uses a mock text response).
-- Performs lightweight rule-based NLP to detect crime types and extract reported time.
-- Classifies complaints into BNS legal sections via a dictionary-based lookup, including rules that escalate based on key terms like `weapon` or `knife`.
-- Returns structured JSON and presents the result in a beginner-friendly React card UI.
+- ✅ **Real OCR Implementation**: Extracts text from handwritten complaints using EasyOCR
+- ✅ **Image Preprocessing**: Automatic noise removal, contrast enhancement, and thresholding for better OCR accuracy
+- ✅ **Text Input Support**: Direct text entry for typed complaints
+- ✅ **Rule-Based NLP**: Extracts crime type, location, time, persons involved, and key events
+- ✅ **Legal Classification**: Maps complaints to BNS legal sections with escalation rules
+- ✅ **Interactive UI**: Clean React-based interface with real-time analysis
 
 ## System Architecture
 - **Frontend**: Vite + React app that submits multipart form data with text or an image, then displays the returned analysis.
-- **Backend**: FastAPI + Uvicorn server that parses the form, applies rule-based NLP/classification, and exposes `/analyze` with CORS enabled.
+- **Backend**: FastAPI + Uvicorn server with EasyOCR for text extraction, image preprocessing with OpenCV and PIL, and rule-based NLP/classification.
 
 ## Module Explanation
-- **Module 1: Complaint Input** – `ComplaintForm` captures the complaint story, optional image, and submits them via `fetch` using `FormData`.
-- **Module 2: OCR (Mock or Basic)** – Incoming image uploads are handled with a mocked text response (e.g., "Someone stole my bike…") to keep the demo simple while illustrating how OCR output would be used.
-- **Module 3: Rule-Based NLP** – `analyze_complaint` checks for keywords (`theft`, `threat`, `assault`), runs a regex for times like `8 PM`, and creates a 100-character summary.
-- **Module 4: Legal Section Classification** – `classify_legal_section` maps crime types to BNS sections, with extra rules for weapons (`knife`, `weapon`) to escalate to `Aggravated Assault – BNS Section 118` and small thefts to include a note.
+- **Module 1: Complaint Input** – `ComplaintForm` captures the complaint story or image upload, and submits them via `fetch` using `FormData`.
+- **Module 2: Handwritten Complaint Digitization (OCR)** – Real OCR implementation:
+  - **Preprocessing**: Noise removal using bilateral filter, contrast enhancement, grayscale conversion, and adaptive thresholding
+  - **Text Extraction**: EasyOCR deep learning model extracts text from handwritten/printed images
+  - **Validation**: Confidence scoring and text length validation
+- **Module 3: Rule-Based NLP** – `analyze_complaint` extracts:
+  - Crime type (theft, threat, assault)
+  - Location (using pattern matching)
+  - Time (regex for time formats)
+  - Persons involved (name extraction and role detection)
+  - Key events (action verb extraction)
+- **Module 4: Legal Section Classification** – `classify_legal_section` maps crime types to BNS sections with escalation rules for weapons and special notes for minor theft.
 
 ## Folder Structure
 ```
@@ -40,8 +50,20 @@ Complaint Input System/
 ## Installation Instructions
 ### Backend setup
 ```bash
-python -m pip install fastapi uvicorn python-multipart
+# Install all required dependencies
+pip install -r requirements.txt
+
+# This will install:
+# - FastAPI (web framework)
+# - Uvicorn (ASGI server)
+# - EasyOCR (OCR engine)
+# - OpenCV (image processing)
+# - Pillow (image enhancement)
+# - NumPy (array operations)
 ```
+
+**⚠️ Important Note**: On first run, EasyOCR will download ~500MB of pre-trained models. This is a one-time download.
+
 ### Frontend setup
 ```bash
 cd frontend
@@ -119,6 +141,46 @@ Your frontend will be available at the Vercel URL (e.g., `https://complaint-app.
 - If you update environment variables in Vercel, trigger a new deployment for changes to take effect
 
 **Troubleshooting**: If build fails, ensure Root Directory is set to `frontend` (not blank or root).
+
+## OCR Usage & Best Practices
+
+### Using Image Upload
+1. **Supported Formats**: JPG, PNG, JPEG, BMP, TIFF
+2. **Image Quality Tips**:
+   - ✅ Good lighting with no shadows
+   - ✅ Clear, legible handwriting
+   - ✅ High contrast (dark text on light background)
+   - ✅ Flat paper (no wrinkles or folds)
+   - ✅ Straight orientation (not tilted)
+   - ❌ Avoid blurry or low-resolution images
+   - ❌ Avoid images with complex backgrounds
+
+### OCR Processing
+The system automatically:
+1. Enhances image contrast (2x)
+2. Converts to grayscale
+3. Removes noise using bilateral filtering
+4. Applies adaptive thresholding for text clarity
+5. Extracts text using EasyOCR deep learning model
+6. Filters results with confidence threshold (>30%)
+
+### Expected Response
+```json
+{
+  "status": "ok",
+  "extracted_text": "Text detected from your image",
+  "crime_type": "Theft",
+  "location": "Central Park",
+  "time": "8 PM",
+  "persons_involved": "Unknown person",
+  "key_event": "Stole my bike",
+  "summary": "...",
+  "predicted_section": "BNS Section 303",
+  "special_note": null
+}
+```
+
+**Note**: First OCR request may take 30-60 seconds as EasyOCR loads the model. Subsequent requests are much faster (2-5 seconds).
 
 ## Sample Input and Output
 **Input (text form data):**
