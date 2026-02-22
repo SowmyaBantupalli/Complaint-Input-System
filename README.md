@@ -152,16 +152,48 @@ VITE_BACKEND_URL=https://complaint-input-system.onrender.com
 ### Backend (Render)
 ✅ **Deployed**: https://complaint-input-system.onrender.com
 
-**Steps to deploy:**
+**CRITICAL: Tesseract Installation on Render**
+
+Render needs to install Tesseract OCR system package. Here's how to ensure it works:
+
+**Method 1: Using Aptfile (Recommended)**
+1. Ensure `Aptfile` is in your repository root (already included)
+2. Verify it contains:
+   ```
+   tesseract-ocr
+   tesseract-ocr-eng
+   libtesseract-dev
+   ```
+3. Render should automatically detect and install these packages
+
+**Method 2: Manual Configuration in Render Dashboard**
+If Aptfile doesn't work, set this in Render:
+1. Go to your service → Environment
+2. Set **Build Command** to:
+   ```bash
+   apt-get update && apt-get install -y tesseract-ocr tesseract-ocr-eng && pip install -r requirements.txt
+   ```
+   
+**Deployment Steps:**
 1. Create new **Web Service** on [Render](https://render.com)
 2. Connect your GitHub repository
 3. Configure service:
-   - **Environment**: Python 3
+   - **Environment**: Python 3 (Native Environment, NOT Docker)
    - **Build Command**: `pip install -r requirements.txt`
    - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-4. Deploy and note your backend URL
+4. Click **"Advanced"** → Add **Native Environment** if not already selected
+5. Deploy and check logs to verify Tesseract is installed
 
-**Important**: The `Aptfile` in the repository tells Render to automatically install Tesseract OCR engine during deployment.
+**Troubleshooting Deployment:**
+- Check build logs for "Tesseract" to verify installation
+- If you see "tesseract is not installed" error:
+  1. Verify Aptfile is in repository root
+  2. Ensure service is using "Native Environment" (not Docker)
+  3. Try Method 2 above (manual build command)
+  4. Redeploy after making changes
+
+**Alternative: If Tesseract Installation Fails**
+See "Alternative Deployment" section below for a workaround.
 
 ### Frontend (Vercel)
 1. Go to [Vercel](https://vercel.com) and create new project
@@ -185,6 +217,42 @@ Your frontend will be available at the Vercel URL (e.g., `https://complaint-app.
 - If you update environment variables in Vercel, trigger a new deployment for changes to take effect
 
 **Troubleshooting**: If build fails, ensure Root Directory is set to `frontend` (not blank or root).
+
+### Alternative Deployment Options
+
+If you're unable to install Tesseract on Render's free tier, here are alternatives:
+
+**Option 1: Use Railway or Fly.io**
+Both platforms support Aptfile/system packages better:
+- [Railway](https://railway.app) - Similar to Render, good Aptfile support
+- [Fly.io](https://fly.io) - Docker-based, more flexibility
+
+**Option 2: Deploy to Heroku**
+Heroku has buildpacks that support Tesseract:
+1. Add this buildpack: `https://github.com/heroku/heroku-buildpack-apt`
+2. Ensure Aptfile is in root directory
+3. Deploy normally
+
+**Option 3: Use Docker on Render**
+Create a `Dockerfile`:
+```dockerfile
+FROM python:3.11-slim
+
+RUN apt-get update && apt-get install -y \\
+    tesseract-ocr \\
+    tesseract-ocr-eng \\
+    libopencv-dev
+
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+
+CMD uvicorn main:app --host 0.0.0.0 --port $PORT
+```
+
+**Option 4: Disable OCR (Text-Only Mode)**
+For demo purposes, you can temporarily disable image upload and only use text input until deployment is resolved.
 
 ## OCR Usage & Best Practices
 
