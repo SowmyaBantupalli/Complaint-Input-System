@@ -48,22 +48,54 @@ cd frontend
 npm install
 ```
 
+### Environment Configuration
+The frontend includes a `.env` file to configure the backend URL:
+- **For local backend**: Change `VITE_BACKEND_URL` to `http://localhost:8000`
+- **For production backend**: Use `https://complaint-input-system.onrender.com` (already set)
+
+Edit `frontend/.env`:
+```env
+# Use local backend
+VITE_BACKEND_URL=http://localhost:8000
+
+# OR use production backend from local frontend
+VITE_BACKEND_URL=https://complaint-input-system.onrender.com
+```
+
 ## How to Run the Project
+
+### Option 1: Run Both Frontend and Backend Locally
 1. Start the backend:
    ```bash
    python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
    ```
-2. Launch the frontend (from `frontend` directory):
+2. Set `.env` to use local backend: `VITE_BACKEND_URL=http://localhost:8000`
+3. Launch the frontend (from `frontend` directory):
    ```bash
    npm run dev -- --host 0.0.0.0 --port 5173
    ```
-3. Open `http://localhost:5173/`, enter a complaint or upload an image, and submit.
+4. Open `http://localhost:5173/`, enter a complaint or upload an image, and submit.
+
+### Option 2: Run Frontend Locally with Production Backend
+1. Set `.env` to use production backend: `VITE_BACKEND_URL=https://complaint-input-system.onrender.com`
+2. Launch the frontend:
+   ```bash
+   npm run dev -- --host 0.0.0.0 --port 5173
+   ```
+3. Open `http://localhost:5173/` - it will connect to the deployed backend
 
 ## Deployment
-### Backend (Render/Railway/Fly.io)
-1. Deploy `main.py` to a Python hosting service (Render, Railway, or Fly.io)
-2. Set the start command to: `uvicorn main:app --host 0.0.0.0 --port $PORT`
-3. Note the deployed backend URL (e.g., `https://your-api.onrender.com`)
+### Backend (Render)
+✅ **Deployed**: https://complaint-input-system.onrender.com
+
+**Steps to deploy:**
+1. Create new **Web Service** on [Render](https://render.com)
+2. Connect your GitHub repository
+3. Configure service:
+   - **Environment**: Python 3
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
+4. Deploy and note your backend URL
 
 ### Frontend (Vercel)
 1. Go to [Vercel](https://vercel.com) and create new project
@@ -76,10 +108,15 @@ npm install
    - **Install Command**: Leave default or set to `npm install`
 4. Add environment variable:
    - Name: `VITE_BACKEND_URL`
-   - Value: Your backend URL (e.g., `https://your-api.onrender.com`)
+   - Value: `https://complaint-input-system.onrender.com` (without trailing slash)
 5. Click "Deploy"
 
 Your frontend will be available at the Vercel URL (e.g., `https://complaint-app.vercel.app`)
+
+**Important Notes:**
+- ⚠️ Do NOT add a trailing slash to `VITE_BACKEND_URL` (use `https://...com` not `https://...com/`)
+- The code automatically handles URL formatting to prevent double slashes
+- If you update environment variables in Vercel, trigger a new deployment for changes to take effect
 
 **Troubleshooting**: If build fails, ensure Root Directory is set to `frontend` (not blank or root).
 

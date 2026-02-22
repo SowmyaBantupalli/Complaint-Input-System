@@ -32,7 +32,8 @@ export default function ComplaintForm({ onStart, onResult, onError }) {
     onStart();  // Notify parent component that submission started
 
     // Get backend URL from environment variable or use localhost for dev
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+    // Remove trailing slash to prevent double slashes in the endpoint URL
+    const backendUrl = (import.meta.env.VITE_BACKEND_URL || "http://localhost:8000").replace(/\/$/, "");
 
     try {
       // Send POST request with FormData to backend /analyze endpoint
