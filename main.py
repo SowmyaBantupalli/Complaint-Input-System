@@ -197,13 +197,24 @@ def analyze_complaint(text: str) -> dict:
     location_patterns = [
         r"(?:at|near|in|on|from|around|outside|inside)\s+(?:the\s+)?([a-zA-Z0-9\s]+?(?:park|street|road|avenue|mall|store|shop|building|station|market|center|campus|school|college|temple|mosque|church|hospital))",
         r"(?:at|near|in|on)\s+(?:the\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})",
-        r"(?:at|near|in|on)\s+([a-z]+\s+[a-z]+)",
+        r"(?:at|near|in|on)\s+(?:my|the|a)\s+([a-z]+)",
     ]
+    
+    # Words that indicate end of location
+    location_stopwords = {"during", "when", "while", "after", "before", "and", "but", "because"}
     
     for pattern in location_patterns:
         loc_match = re.search(pattern, text, re.IGNORECASE)
         if loc_match:
             found_location = loc_match.group(1).strip()
+            # Remove stopwords from location
+            location_words = found_location.split()
+            clean_words = []
+            for word in location_words:
+                if word.lower() in location_stopwords:
+                    break
+                clean_words.append(word)
+            found_location = " ".join(clean_words)
             # Clean up and validate
             if len(found_location) > 2 and len(found_location) < 50:
                 location = found_location.title()
@@ -213,11 +224,11 @@ def analyze_complaint(text: str) -> dict:
     persons_involved = "Not mentioned"
     
     # First, check for person descriptors (suspect, victim, etc.)
-    descriptor_pattern = r"\b(suspect|victim|witness|accused|attacker|perpetrator|thief|criminal)\b"
+    descriptor_pattern = r"\b(my\s+(?:neighbor|friend|colleague|relative|uncle|brother|sister|father|mother)|suspect|victim|witness|accused|attacker|perpetrator|thief|criminal|stranger|unknown\s+person)\b"
     descriptor_match = re.search(descriptor_pattern, lowered)
     
     if descriptor_match:
-        persons_involved = descriptor_match.group(1).capitalize()
+        persons_involved = descriptor_match.group(1).title()
     else:
         # Look for capitalized proper names (2-3 word names)
         name_pattern = r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})\b"
@@ -230,7 +241,8 @@ def analyze_complaint(text: str) -> dict:
             "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
             "January", "February", "March", "April", "May", "June", "July", "August", 
             "September", "October", "November", "December",
-            "Police", "Section", "Complaint", "Officer"
+            "Police", "Section", "Complaint", "Officer",
+            "Date", "Today", "Yesterday", "Tomorrow", "Now", "Time", "Name", "Request"
         }
         
         valid_names = []
@@ -254,6 +266,7 @@ def analyze_complaint(text: str) -> dict:
     key_event = "Not identified"
     event_patterns = [
         r"(stole\s+(?:my|a|the)\s+\w+)",
+        r"(threatened\s+(?:me|us)[^.!?]*?(?:near|at|in|during)[^.!?]*?(?:argument|altercation|fight|dispute))",
         r"(threatened\s+(?:me|us|to|with)\s+[\w\s]+)",
         r"(assaulted\s+(?:me|us|someone))",
         r"(broke\s+(?:into|the|my)\s+\w+)",
