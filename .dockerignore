@@ -1,3 +1,4 @@
+# Python cache
 __pycache__
 *.pyc
 *.pyo
@@ -8,15 +9,40 @@ __pycache__
 *.egg-info
 dist
 build
+
+# Git
 .git
 .gitignore
+
+# IDE
 .vscode
 .idea
+
+# Documentation (safe to exclude)
 *.md
+README.md
+DEPLOYMENT.md
+DOCKER_DEPLOYMENT.md
+GEMINI_SETUP.md
+IMPLEMENTATION_SUMMARY.md
+RENDER_COPY_PASTE.md
+RENDER_QUICK_SETUP.md
+TESSERACT_INSTALL.md
+
+# Frontend (not needed in backend container)
 frontend/
 node_modules/
+
+# Environment and secrets
 .env
+.env.local
+
+# Logs and cache
 *.log
 .mypy_cache
+
+# Test files
 test_tesseract.py
-TESSERACT_INSTALL.md
+
+# Build scripts (only needed for non-Docker deployments)
+build.sh

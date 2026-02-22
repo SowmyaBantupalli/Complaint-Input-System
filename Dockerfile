@@ -15,8 +15,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy application code - ALL Python files and data
 COPY main.py .
+COPY bns_classifier.py .
+COPY data/ ./data/
 
 # Expose port (Render sets $PORT dynamically)
 EXPOSE 8000
