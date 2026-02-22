@@ -1,9 +1,11 @@
 # AI-Based Complaint Management System - Backend
-# This FastAPI application provides a rule-based NLP system for complaint analysis
+# This FastAPI application provides AI-powered complaint analysis using Google Gemini
+# Uses BNS dataset for intelligent legal classification
 # Uses Tesseract OCR for handwritten complaint digitization
 
 from fastapi import FastAPI, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import re
 import pytesseract
 import cv2
@@ -12,8 +14,13 @@ from PIL import Image, ImageEnhance
 import io
 import os
 import platform
+from bns_classifier import get_classifier
 
-app = FastAPI(title="Complaint Analyzer Demo")
+app = FastAPI(
+    title="AI Complaint Analyzer",
+    description="Intelligent complaint classification using Google Gemini and BNS dataset",
+    version="2.0.0"
+)
 
 # Configure Tesseract path for different environments
 # This handles Windows installations where Tesseract may not be in PATH
@@ -42,6 +49,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Initialize BNS Classifier on startup
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the BNS classifier when the app starts"""
+    classifier = get_classifier()
+    if classifier.is_initialized:
+        print("🚀 AI-powered complaint analyzer ready with Gemini API")
+    else:
+        print("⚠️ Running in fallback mode - set GEMINI_API_KEY environment variable for AI features")
+
+
+@app.get("/")
+async def root():
+    """Health check and API info endpoint"""
+    classifier = get_classifier()
+    return {
+        "status": "online",
+        "service": "AI Complaint Analyzer",
+        "version": "2.0.0",
+        "ai_enabled": classifier.is_initialized,
+        "bns_sections_loaded": len(classifier.bns_data) if classifier.bns_data is not None else 0,
+        "engine": "Google Gemini 1.5 Flash" if classifier.is_initialized else "Rule-based fallback"
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """Detailed health check for monitoring"""
+    classifier = get_classifier()
+    return {
+        "status": "healthy",
+        "gemini_api": "active" if classifier.is_initialized else "not configured",
+        "bns_dataset": "loaded" if classifier.bns_data is not None else "error",
+        "ocr_engine": "tesseract" if check_tesseract_available() else "unavailable"
+    }
+
+
+def check_tesseract_available() -> bool:
+    """Check if Tesseract OCR is available"""
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except:
+        return False
 
 
 # MODULE 2: Image Preprocessing for OCR
@@ -139,177 +192,24 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         return f"OCR_ERROR: {str(e)}"
 
 
-# MODULE 4: Legal Section (BNS/BNSS) Classification
-# This function uses rule-based mapping to classify crimes into BNS sections
-# Input: crime_type (from Module 3) and summary text
-# Output: BNS section and optional special note
-def classify_legal_section(crime_type: str, summary: str) -> tuple[str, str | None]:
-    # Dictionary-based mapping: crime type → BNS section
-    # This is NOT machine learning - just a lookup table
-    law_map = {
-        "Theft": "BNS Section 303",
-        "Threat": "BNS Section 351",
-        "Assault": "BNS Section 115",
-    }
-
-    lowered_summary = summary.lower()
-    
-    # Rule-based escalation: Check for weapon keywords in summary
-    # If weapon mentioned → escalate to aggravated assault
-    if "weapon" in lowered_summary or "knife" in lowered_summary:
-        return "Aggravated Assault – BNS Section 118", "Weapon reference escalates the charge."
-
-    # Additional rule: Flag minor theft cases for review
-    note = None
-    if "minor" in lowered_summary and "theft" in lowered_summary:
-        note = "Minor theft noted; monitor for follow-up."
-
-    # Default: Return mapped section or "Section Not Found" for unknown crimes
-    predicted_section = law_map.get(crime_type, "Section Not Found")
-    return predicted_section, note
-
-
-# MODULE 3: Rule-Based NLP Analysis
-# This function extracts crime type, time, and summary from complaint text
-# Uses simple keyword matching and regex - NO machine learning
-def analyze_complaint(text: str) -> dict:
-    # Step 1: Crime Type Detection using keyword matching
-    lowered = text.lower()
-    if "theft" in lowered or "stole" in lowered:
-        crime_type = "Theft"
-    elif "threat" in lowered:
-        crime_type = "Threat"
-    elif "assault" in lowered:
-        crime_type = "Assault"
-    else:
-        crime_type = "Unknown"  # No keywords matched
-
-    # Step 2: Time Extraction using Regular Expression
-    # Pattern matches: "8 PM", "10am", "3 PM" etc.
-    time_match = re.search(r"\b\d{1,2}\s*(?:am|pm|AM|PM)\b", text)
-    time = time_match.group(0) if time_match else "Not provided"
-
-    # Step 3: Location Extraction using keyword-based approach
-    # Look for location indicators like "at", "near", "in", "on" followed by place names
-    location = "Not specified"
-    
-    # Try multiple patterns for location extraction
-    location_patterns = [
-        r"(?:at|near|in|on|from|around|outside|inside)\s+(?:the\s+)?([a-zA-Z0-9\s]+?(?:park|street|road|avenue|mall|store|shop|building|station|market|center|campus|school|college|temple|mosque|church|hospital))",
-        r"(?:at|near|in|on)\s+(?:the\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+){0,2})",
-        r"(?:at|near|in|on)\s+(?:my|the|a)\s+([a-z]+)",
-    ]
-    
-    # Words that indicate end of location
-    location_stopwords = {"during", "when", "while", "after", "before", "and", "but", "because"}
-    
-    for pattern in location_patterns:
-        loc_match = re.search(pattern, text, re.IGNORECASE)
-        if loc_match:
-            found_location = loc_match.group(1).strip()
-            # Remove stopwords from location
-            location_words = found_location.split()
-            clean_words = []
-            for word in location_words:
-                if word.lower() in location_stopwords:
-                    break
-                clean_words.append(word)
-            found_location = " ".join(clean_words)
-            # Clean up and validate
-            if len(found_location) > 2 and len(found_location) < 50:
-                location = found_location.title()
-                break
-    
-    # Step 4: Persons Involved - Extract names or person descriptors
-    persons_involved = "Not mentioned"
-    
-    # First, check for person descriptors (suspect, victim, etc.)
-    descriptor_pattern = r"\b(my\s+(?:neighbor|friend|colleague|relative|uncle|brother|sister|father|mother)|suspect|victim|witness|accused|attacker|perpetrator|thief|criminal|stranger|unknown\s+person)\b"
-    descriptor_match = re.search(descriptor_pattern, lowered)
-    
-    if descriptor_match:
-        persons_involved = descriptor_match.group(1).title()
-    else:
-        # Look for capitalized proper names (2-3 word names)
-        name_pattern = r"\b([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})\b"
-        name_matches = re.findall(name_pattern, text)
-        
-        # Filter out common words that aren't names
-        excluded_words = {
-            "Someone", "Something", "Anyone", "The", "This", "That", "These", "Those",
-            "What", "When", "Where", "Which", "Who", "Why", "How",
-            "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday",
-            "January", "February", "March", "April", "May", "June", "July", "August", 
-            "September", "October", "November", "December",
-            "Police", "Section", "Complaint", "Officer",
-            "Date", "Today", "Yesterday", "Tomorrow", "Now", "Time", "Name", "Request"
-        }
-        
-        valid_names = []
-        for name in name_matches:
-            words = name.split()
-            # Check if any word in the name is in excluded list
-            if not any(word in excluded_words for word in words):
-                # Verify it's not a common word by checking length and structure
-                if len(name) >= 3 and len(words) <= 3:
-                    valid_names.append(name)
-        
-        if valid_names:
-            # Take up to 2 most unique names
-            unique_names = list(dict.fromkeys(valid_names))[:2]
-            persons_involved = ", ".join(unique_names)
-        elif "someone" in lowered or "somebody" in lowered:
-            persons_involved = "Unknown person"
-
-    # Step 5: Key Event Extraction - identify main action
-    # Look for action verbs and their context
-    key_event = "Not identified"
-    event_patterns = [
-        r"(stole\s+(?:my|a|the)\s+\w+)",
-        r"(threatened\s+(?:me|us)[^.!?]*?(?:near|at|in|during)[^.!?]*?(?:argument|altercation|fight|dispute))",
-        r"(threatened\s+(?:me|us|to|with)\s+[\w\s]+)",
-        r"(assaulted\s+(?:me|us|someone))",
-        r"(broke\s+(?:into|the|my)\s+\w+)",
-        r"(attacked\s+(?:me|us|someone))",
-    ]
-    for pattern in event_patterns:
-        event_match = re.search(pattern, lowered)
-        if event_match:
-            key_event = event_match.group(1).capitalize()
-            break
-    
-    # If no specific pattern, extract first sentence as key event
-    if key_event == "Not identified":
-        first_sentence = re.split(r'[.!?]', text)[0].strip()
-        if len(first_sentence) > 10:
-            key_event = first_sentence[:80] + "..." if len(first_sentence) > 80 else first_sentence
-
-    # Step 6: Generate summary (first 150 characters)
-    summary = (text.strip()[:150]).rstrip()
-
-    # Step 7: Call Module 4 to get BNS legal section
-    predicted_section, special_note = classify_legal_section(crime_type, summary)
-
-    # Return structured JSON response
-    return {
-        "crime_type": crime_type,
-        "location": location,
-        "time": time,
-        "persons_involved": persons_involved,
-        "key_event": key_event,
-        "summary": summary,
-        "predicted_section": predicted_section,
-        "special_note": special_note,
-    }
-
-
-# MODULE 1 & 2: Complaint Input Endpoint
+# MODULE 1 & 2: Complaint Input and Analysis Endpoint
 # Accepts either text input or image upload with real OCR processing
+# Uses Gemini AI for intelligent classification
 @app.post("/analyze")
 async def handle_analyze(
     complaint: str = Form(None),  # Optional text input
     image: UploadFile | None = File(None),  # Optional image file
 ):
+    """
+    Analyze complaint using AI and BNS dataset
+    
+    Accepts:
+    - Text complaint (typed by user)
+    - Image complaint (handwritten, processed via OCR)
+    
+    Returns:
+    - Structured JSON with crime classification, BNS sections, and extracted details
+    """
     # MODULE 2: Real OCR Implementation
     if image:
         # Read image file bytes
@@ -317,54 +217,87 @@ async def handle_analyze(
         
         # Validate image file
         if not image.content_type or not image.content_type.startswith('image/'):
-            return {
-                "status": "error",
-                "detail": "Invalid file type. Please upload an image file."
-            }
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "Invalid file type. Please upload an image file."
+                }
+            )
         
         # Extract text using OCR with preprocessing
         text_to_analyze = extract_text_from_image(image_bytes)
         
         # Check for Tesseract installation issues
         if text_to_analyze == "TESSERACT_NOT_INSTALLED":
-            return {
-                "status": "error",
-                "detail": "OCR is not available on this server. Tesseract OCR is not installed. Please use Docker deployment or deploy to a platform that supports system packages. For now, please use text input instead of image upload."
-            }
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "status": "error",
+                    "detail": "OCR is not available on this server. Tesseract OCR is not installed. Please use Docker deployment or deploy to a platform that supports system packages. For now, please use text input instead of image upload."
+                }
+            )
         
         # Check if OCR encountered errors
         if text_to_analyze.startswith("OCR_ERROR"):
-            return {
-                "status": "error",
-                "detail": f"OCR processing failed: {text_to_analyze.replace('OCR_ERROR: ', '')}. Please try again or use text input."
-            }
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "status": "error",
+                    "detail": f"OCR processing failed: {text_to_analyze.replace('OCR_ERROR: ', '')}. Please try again or use text input."
+                }
+            )
         
         # Check if no text was detected
         if text_to_analyze == "No text detected in image":
-            return {
-                "status": "error",
-                "detail": "No text detected in image. Please ensure the image contains clear, readable text."
-            }
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "No text detected in image. Please ensure the image contains clear, readable text."
+                }
+            )
         
         # If extracted text is too short, it might be a bad scan
         if len(text_to_analyze.strip()) < 10:
-            return {
-                "status": "error",
-                "detail": "Could not extract enough text from image. Please ensure the image is clear and contains readable text."
-            }
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "Could not extract enough text from image. Please ensure the image is clear and contains readable text."
+                }
+            )
             
     elif complaint:
         text_to_analyze = complaint
     else:
-        return {"status": "error", "detail": "Provide complaint text or image."}
+        return JSONResponse(
+            status_code=400,
+            content={
+                "status": "error",
+                "detail": "Provide complaint text or image."
+            }
+        )
 
-    # Call Module 3 to analyze the complaint
-    analysis = analyze_complaint(text_to_analyze)
-    
-    # Return success status with analysis results
-    # Include extracted_text field to show what OCR detected
-    return {
-        "status": "ok",
-        "extracted_text": text_to_analyze if image else None,
-        **analysis
-    }
+    # MODULE 3: AI-Powered Classification using Gemini and BNS dataset
+    try:
+        classifier = get_classifier()
+        analysis = classifier.classify_complaint(text_to_analyze)
+        
+        # Return success status with analysis results
+        return {
+            "status": "ok",
+            "extracted_text": text_to_analyze if image else None,
+            "ai_powered": analysis.get("ai_classification", False),
+            **analysis
+        }
+        
+    except Exception as e:
+        print(f"❌ Classification error: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "detail": f"Error analyzing complaint: {str(e)}"
+            }
+        )
