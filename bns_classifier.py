@@ -138,25 +138,47 @@ COMPLAINT TEXT:
 TASK:
 Analyze the complaint THOROUGHLY and extract ALL mentioned information in strict JSON format:
 
-1. **crime_type**: Primary crime category (Theft, Assault, Threat, Harassment, Fraud, Murder, Rape, Kidnapping, etc.)
-2. **location**: FULL location details - include area names, landmarks, cities, addresses, building names (e.g., "Andheri East, Mumbai" or "outside apartment in Andheri East")
-3. **date**: Complete date if mentioned (e.g., "5 January 2026", "yesterday", "last week")
-4. **time**: Exact time if mentioned (e.g., "8:30 PM", "around 8:30 PM")
-5. **persons_involved**: ALL names mentioned - victim, accused, witnesses, complainant (e.g., "Ramesh Sharma (victim)", "Unknown accused")
-6. **key_event_summary**: Clear 2-3 sentence summary including WHAT was stolen/damaged, WHO was involved, WHERE it happened
-7. **bns_sections**: Applicable BNS sections with reasons (format: [{{"section": "303", "reason": "Theft of motor vehicle"}}])
-8. **severity**: Low/Medium/High based on crime nature and value
-9. **additional_notes**: Important observations, item stolen, estimated value, escalation flags
+1. **crime_type**: SPECIFIC crime category based on severity:
+   - "Grievous Hurt" if: fractures, broken bones, permanent disfigurement, serious bodily injury, weapon causing injury
+   - "Assault" if: simple physical attack without serious injury
+   - "Theft" for stolen items
+   - "Threat/Criminal Intimidation" for verbal threats
+   - Use OTHER specific categories: Murder, Rape, Kidnapping, Robbery, Burglary, Fraud, Harassment, etc.
 
-EXTRACTION RULES:
-- Extract EVERY location mentioned (areas, cities, landmarks, building names)
-- Extract EVERY person name mentioned (victim, accused, witnesses)
-- Extract specific items stolen or damaged
-- If complaint says "Name: John Doe" - that's the complainant/victim
-- "yesterday", "last night" counts as date information
-- Include area names like "Andheri East", "Mumbai" in location
+2. **location**: ONLY the place/area/city - NOT time or date:
+   - Extract: "Railway Station, Lucknow" or "Near Railway Station, Lucknow"
+   - Do NOT include time in location (e.g., NOT "8 PM near railway station")
+   - Format: [Landmark/Place], [Area], [City]
+
+3. **date**: Complete date if mentioned (e.g., "8 April 2026", "yesterday", "last week")
+
+4. **time**: Exact time if mentioned (e.g., "8 PM", "around 8:30 PM")
+
+5. **persons_involved**: ALL names mentioned - victim, accused, witnesses, complainant (e.g., "Imran Khan (Complainant/Victim)", "Unknown accused")
+
+6. **key_event_summary**: Clear 2-3 sentence summary including WHAT happened, WHO was involved, WHERE it happened, injury/damage details
+
+7. **bns_sections**: Applicable BNS sections with specific reasons:
+   - Section 116 for Grievous Hurt (fractures, serious injury with weapon)
+   - Section 115 for simple Assault (no serious injury)
+   - Section 118 for Grievous Hurt with deadly weapons
+   - Section 303 for Theft
+   - Section 351 for Criminal Intimidation
+   - Format: [{{"section": "116", "reason": "Grievous hurt - fracture caused by metal rod"}}]
+
+8. **severity**: 
+   - High: Grievous hurt, weapons used, serious injury, high-value theft
+   - Medium: Simple assault, threats, minor theft
+   - Low: Harassment, verbal disputes
+
+9. **additional_notes**: Important observations, injury details, weapon used, medical attention needed, escalation flags
+
+CRITICAL CLASSIFICATION RULES:
+- FRACTURES, BROKEN BONES = "Grievous Hurt" (Section 116), NOT "Assault"
+- WEAPON CAUSING INJURY = "Grievous Hurt" (Section 116 or 118)
+- SIMPLE ATTACK WITHOUT INJURY = "Assault" (Section 115)
+- Location should NOT contain time/date - only place names
 - Do NOT write "Not Specified" if information IS present in the text
-- Only use "Not Specified" for truly missing information
 - Be THOROUGH - read the entire complaint carefully
 
 OUTPUT FORMAT:
@@ -224,9 +246,38 @@ OUTPUT FORMAT:
         
         lowered = text.lower()
         
-        # Crime type detection with item stolen
+        # Crime type detection with severity escalation
         stolen_item = "property"
-        if "motorcycle" in lowered or "bike" in lowered or "two wheeler" in lowered:
+        
+        # Check for Grievous Hurt FIRST (more specific than assault)
+        grievous_hurt_keywords = [
+            "fracture", "fractured", "broken bone", "broken arm", "broken leg",
+            "permanent", "disfigure", "loss of limb", "severe injury", "serious injury",
+            "hospitalized", "surgery", "stitches", "internal bleeding"
+        ]
+        
+        weapon_keywords = [
+            "knife", "rod", "stick", "bat", "weapon", "blade", "gun", "pistol",
+            "metal rod", "iron rod", "wooden stick", "sharp object", "bottle"
+        ]
+        
+        has_grievous_hurt = any(keyword in lowered for keyword in grievous_hurt_keywords)
+        has_weapon = any(keyword in lowered for keyword in weapon_keywords)
+        is_attack = "attack" in lowered or "assault" in lowered or "hit" in lowered or "beat" in lowered
+        
+        if has_grievous_hurt and (is_attack or has_weapon):
+            crime_type = "Grievous Hurt"
+            if has_weapon:
+                predicted_section = "BNS Section 118 - Voluntarily Causing Grievous Hurt with Dangerous Weapon"
+                severity = "High"
+            else:
+                predicted_section = "BNS Section 116 - Voluntarily Causing Grievous Hurt"
+                severity = "High"
+        elif has_weapon and is_attack:
+            crime_type = "Grievous Hurt"
+            predicted_section = "BNS Section 118 - Assault with Dangerous Weapon"
+            severity = "High"
+        elif "motorcycle" in lowered or "bike" in lowered or "two wheeler" in lowered:
             crime_type = "Theft"
             stolen_item = "motorcycle"
             predicted_section = "BNS Section 303 - Theft of Motor Vehicle"
@@ -242,10 +293,10 @@ OUTPUT FORMAT:
                 stolen_item = "vehicle"
             predicted_section = f"BNS Section 303 - Theft of {stolen_item}"
             severity = "Medium" if stolen_item in ["wallet", "mobile phone"] else "High"
-        elif "assault" in lowered or "attacked" in lowered or "hit" in lowered:
+        elif is_attack:
             crime_type = "Assault"
-            predicted_section = "BNS Section 115 - Assault"
-            severity = "High"
+            predicted_section = "BNS Section 115 - Assault or Criminal Force"
+            severity = "Medium"
         elif "threat" in lowered or "threatened" in lowered:
             crime_type = "Threat"
             predicted_section = "BNS Section 351 - Criminal Intimidation"
@@ -261,47 +312,88 @@ OUTPUT FORMAT:
         else:
             crime_type = "Unknown"
             predicted_section = "Section not determined - requires further review"
-            severity = "Medium"
-        
-        # Enhanced time extraction
-        time_patterns = [
-            r"\b(\d{1,2}:\d{2}\s*(?:am|pm|AM|PM))\b",
-            r"\b(around\s+\d{1,2}:\d{2}\s*(?:am|pm|AM|PM))\b",
-            r"\b(\d{1,2}\s*(?:am|pm|AM|PM))\b"
+        # IMPORTANT: Exclude time patterns from location
+        location = "Not Specified"
+        location_patterns = [
+            # Pattern 1: "near [place] in [city]" - most specific
+            r"(?:near|at)\s+(?:the\s+)?([a-zA-Z\s]+?(?:station|park|mall|market|building|complex|temple|mosque|church))\s+in\s+([A-Z][a-zA-Z]+)",
+            # Pattern 2: City/Area names (Andheri East, Mumbai)
+            r"(?:in|at|near|outside|from)\s+(?:my\s+)?(?:apartment\s+in\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*,\s*[A-Z][a-zA-Z]+)",
+            # Pattern 3: Area with landmarks
+            r"(?:in|at|near|outside)\s+(?:my\s+)?(?:apartment|house|home)\s+(?:in|at)\s+([A-Z][a-zA-Z\s]+(?:East|West|North|South)?(?:,\s*[A-Z][a-zA-Z]+)?)",
+            # Pattern 4: Outside/near apartment in [location]
+            r"(?:outside|near)\s+(?:my\s+)?apartment\s+in\s+([A-Z][a-zA-Z\s,]+)",
+            # Pattern 5: Common places (avoid capturing time)
+            r"(?:at|near|in|on|from|outside)\s+(?:the\s+)?([a-zA-Z\s]+?(?:park|street|road|market|mall|shop|store|building|station|gate|area|colony|complex))(?:\s+in\s+)?([A-Z][a-zA-Z]+)?",
+            # Pattern 6: General area names
+            r"(?:in|at)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)"
         ]
-        time = "Not Specified"
-        for pattern in time_patterns:
-            time_match = re.search(pattern, text, re.IGNORECASE)
-            if time_match:
-                time = time_match.group(1)
-                break
         
-        # Enhanced date extraction
-        date_patterns = [
-            r"(?:Date:\s*)?(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})",
-            r"(?:Date:\s*)?(\d{1,2}[-/]\d{1,2}[-/]\d{2,4})",
-            r"\b(yesterday|today|last night|last week|last month)\b"
-        ]
-        date = "Not Specified"
-        for pattern in date_patterns:
+        for i, pattern in enumerate(location_patterns):
+            loc_match = re.search(pattern, text)
+            if loc_match:
+                if i == 0:  # Pattern 1: near [place] in [city]
+                    place = loc_match.group(1).strip().title()
+                    city = loc_match.group(2).strip().title()
+                    location = f"{place}, {city}"
+                    break
+                elif i == 4:  # Pattern 5: might have city in group 2
+                    found_loc = loc_match.group(1).strip()
+                    city = loc_match.group(2) if loc_match.lastindex >= 2 else None
+                    # Exclude time patterns
+                    if not re.match(r'\d+\s*(?:am|pm|AM|PM)', found_loc):
+                        found_loc = re.sub(r'\s+', ' ', found_loc).title()
+                        if city:
+                            location = f"{found_loc}, {city}"
+                        else:
+                            location = found_loc
+                        if len(location) > 3 and len(location) < 100:
+                            break
+                else:
+                    found_loc = loc_match.group(1).strip()
+                    # Exclude time patterns like "8 PM near"
+                    if not re.match(r'\d+\s*(?:am|pm|AM|PM)', found_loc):
+                        # Clean up location
+                        found_loc = re.sub(r'\s+', ' ', found_loc)
+                        if len(found_loc) > 3 and len(found_loc) < 100:
+                            location = found_loc
+                for pattern in date_patterns:
             date_match = re.search(pattern, text, re.IGNORECASE)
             if date_match:
                 date = date_match.group(1)
                 break
+         with injury details
+        key_event_summary = ""
+        if crime_type == "Theft":
+            key_event_summary = f"Theft of {stolen_item}"
+        elif crime_type == "Grievous Hurt":
+            injury_detail = ""
+            if "fracture" in lowered or "broken" in lowered:
+                injury_detail = "causing fracture/serious injury"
+            weapon_used = ""
+            if has_weapon:
+                for weapon in weapon_keywords:
+                    if weapon in lowered:
+                        weapon_used = f" with {weapon}"
+                        break
+            key_event_summary = f"Grievous hurt {injury_detail}{weapon_used}"
+        else:
+            key_event_summary = f"{crime_type} incident"
         
-        # Enhanced location extraction - multiple patterns
-        location = "Not Specified"
-        location_patterns = [
-            # Pattern 1: City/Area names (Andheri East, Mumbai)
-            r"(?:in|at|near|outside|from)\s+(?:my\s+)?(?:apartment\s+in\s+)?([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)*,\s*[A-Z][a-zA-Z]+)",
-            # Pattern 2: Area with landmarks
-            r"(?:in|at|near|outside)\s+(?:my\s+)?(?:apartment|house|home)\s+(?:in|at)\s+([A-Z][a-zA-Z\s]+(?:East|West|North|South)?(?:,\s*[A-Z][a-zA-Z]+)?)",
-            # Pattern 3: Outside/near apartment in [location]
-            r"(?:outside|near)\s+(?:my\s+)?apartment\s+in\s+([A-Z][a-zA-Z\s,]+)",
-            # Pattern 4: Common places
-            r"(?:at|near|in|on|from|outside)\s+(?:the\s+)?([a-zA-Z0-9\s]+?(?:park|street|road|market|mall|shop|store|building|station|gate|area|colony|complex))",
-            # Pattern 5: General area names
-            r"(?:in|at)\s+([A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+)"
+        if location != "Not Specified":
+            key_event_summary += f" at {location}"
+        if date != "Not Specified":
+            key_event_summary += f" on {date}"
+        if time != "Not Specified":
+            key_event_summary += f" at {time}"
+        
+        # Full summary
+        summary = text[:200] + "..." if len(text) > 200 else text
+        
+        additional_notes = "⚠️ Basic rule-based classification (Gemini AI not configured). "
+        if crime_type == "Grievous Hurt":
+            additional_notes += "Serious bodily injury - medical attention required. Escalate immediately. "
+        el    r"(?:in|at)\s+([A-Z][a-zA-Z]+\s+[A-Z][a-zA-Z]+)"
         ]
         
         for pattern in location_patterns:
