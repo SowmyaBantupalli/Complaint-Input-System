@@ -4,23 +4,24 @@
 This is a production-ready complaint intake platform built for academic purposes. Users submit either text or an image (handwritten or printed) to describe an incident, and the backend analyzes the content with OCR and rule-based NLP to extract the crime type, location, time, persons involved, and the corresponding BNS legal section.
 
 ## Features
-- ✅ **Real OCR Implementation**: Extracts text from handwritten complaints using EasyOCR
+- ✅ **Real OCR Implementation**: Extracts text from handwritten/printed complaints using Tesseract OCR
 - ✅ **Image Preprocessing**: Automatic noise removal, contrast enhancement, and thresholding for better OCR accuracy
 - ✅ **Text Input Support**: Direct text entry for typed complaints
 - ✅ **Rule-Based NLP**: Extracts crime type, location, time, persons involved, and key events
 - ✅ **Legal Classification**: Maps complaints to BNS legal sections with escalation rules
 - ✅ **Interactive UI**: Clean React-based interface with real-time analysis
+- ✅ **Deployment-Ready**: Lightweight dependencies suitable for free hosting tiers
 
 ## System Architecture
 - **Frontend**: Vite + React app that submits multipart form data with text or an image, then displays the returned analysis.
-- **Backend**: FastAPI + Uvicorn server with EasyOCR for text extraction, image preprocessing with OpenCV and PIL, and rule-based NLP/classification.
+- **Backend**: FastAPI + Uvicorn server with Tesseract OCR for text extraction, image preprocessing with OpenCV and PIL, and rule-based NLP/classification.
 
 ## Module Explanation
 - **Module 1: Complaint Input** – `ComplaintForm` captures the complaint story or image upload, and submits them via `fetch` using `FormData`.
 - **Module 2: Handwritten Complaint Digitization (OCR)** – Real OCR implementation:
   - **Preprocessing**: Noise removal using bilateral filter, contrast enhancement, grayscale conversion, and adaptive thresholding
-  - **Text Extraction**: EasyOCR deep learning model extracts text from handwritten/printed images
-  - **Validation**: Confidence scoring and text length validation
+  - **Text Extraction**: Tesseract OCR engine extracts text from handwritten/printed images
+  - **Validation**: Text length and quality validation
 - **Module 3: Rule-Based NLP** – `analyze_complaint` extracts:
   - Crime type (theft, threat, assault)
   - Location (using pattern matching)
@@ -48,7 +49,10 @@ Complaint Input System/
 ```
 
 ## Installation Instructions
+
 ### Backend setup
+
+#### 1. Install Python dependencies
 ```bash
 # Install all required dependencies
 pip install -r requirements.txt
@@ -56,13 +60,34 @@ pip install -r requirements.txt
 # This will install:
 # - FastAPI (web framework)
 # - Uvicorn (ASGI server)
-# - EasyOCR (OCR engine)
+# - pytesseract (OCR Python wrapper)
 # - OpenCV (image processing)
 # - Pillow (image enhancement)
 # - NumPy (array operations)
 ```
 
-**⚠️ Important Note**: On first run, EasyOCR will download ~500MB of pre-trained models. This is a one-time download.
+#### 2. Install Tesseract OCR Engine
+
+**Windows:**
+```bash
+# Download installer from: https://github.com/UB-Mannheim/tesseract/wiki
+# Or use chocolatey:
+choco install tesseract
+
+# Add Tesseract to PATH or set in code:
+# pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+```
+
+**Linux/Ubuntu:**
+```bash
+sudo apt-get update
+sudo apt-get install tesseract-ocr tesseract-ocr-eng libtesseract-dev
+```
+
+**macOS:**
+```bash
+brew install tesseract
+```
 
 ### Frontend setup
 ```bash
@@ -119,6 +144,8 @@ VITE_BACKEND_URL=https://complaint-input-system.onrender.com
    - **Start Command**: `uvicorn main:app --host 0.0.0.0 --port $PORT`
 4. Deploy and note your backend URL
 
+**Important**: The `Aptfile` in the repository tells Render to automatically install Tesseract OCR engine during deployment.
+
 ### Frontend (Vercel)
 1. Go to [Vercel](https://vercel.com) and create new project
 2. Import your GitHub repository
@@ -161,8 +188,8 @@ The system automatically:
 2. Converts to grayscale
 3. Removes noise using bilateral filtering
 4. Applies adaptive thresholding for text clarity
-5. Extracts text using EasyOCR deep learning model
-6. Filters results with confidence threshold (>30%)
+5. Extracts text using Tesseract OCR engine (LSTM mode)
+6. Cleans and validates the extracted text
 
 ### Expected Response
 ```json
@@ -180,7 +207,7 @@ The system automatically:
 }
 ```
 
-**Note**: First OCR request may take 30-60 seconds as EasyOCR loads the model. Subsequent requests are much faster (2-5 seconds).
+**Note**: OCR processing typically takes 2-5 seconds per image.
 
 ## Sample Input and Output
 **Input (text form data):**

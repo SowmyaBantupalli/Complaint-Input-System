@@ -1,11 +1,11 @@
 # AI-Based Complaint Management System - Backend
 # This FastAPI application provides a rule-based NLP system for complaint analysis
-# Uses EasyOCR for handwritten complaint digitization
+# Uses Tesseract OCR for handwritten complaint digitization
 
 from fastapi import FastAPI, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 import re
-import easyocr
+import pytesseract
 import cv2
 import numpy as np
 from PIL import Image, ImageEnhance
@@ -21,12 +21,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Initialize EasyOCR reader globally (loads once at startup)
-# Using English language - add more languages if needed: ['en', 'hi', 'te']
-print("Loading EasyOCR model... This may take a minute on first run.")
-reader = easyocr.Reader(['en'], gpu=False)  # Set gpu=True if GPU available
-print("EasyOCR model loaded successfully!")
 
 
 # MODULE 2: Image Preprocessing for OCR
@@ -78,15 +72,15 @@ def preprocess_image(image_bytes: bytes) -> np.ndarray:
 
 
 # MODULE 2: OCR Text Extraction
-# Extracts text from preprocessed image using EasyOCR
+# Extracts text from preprocessed image using Tesseract OCR
 def extract_text_from_image(image_bytes: bytes) -> str:
     """
-    Extracts text from handwritten complaint image using EasyOCR.
+    Extracts text from handwritten complaint image using Tesseract OCR.
     
     Process:
     1. Preprocess image (noise removal, contrast enhancement)
-    2. Run EasyOCR to detect and extract text
-    3. Combine all detected text into a single string
+    2. Run Tesseract OCR to detect and extract text
+    3. Clean and return the extracted text
     
     Args:
         image_bytes: Raw image file bytes
@@ -98,21 +92,19 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         # Preprocess the image for better OCR accuracy
         preprocessed_img = preprocess_image(image_bytes)
         
-        # Use EasyOCR to extract text
-        # reader.readtext returns list of (bbox, text, confidence)
-        results = reader.readtext(preprocessed_img)
+        # Convert numpy array to PIL Image for pytesseract
+        pil_img = Image.fromarray(preprocessed_img)
         
-        # Extract only the text parts and join them
-        # Each result is a tuple: (bounding_box, text, confidence)
-        extracted_texts = [text for (bbox, text, confidence) in results if confidence > 0.3]
+        # Use Tesseract to extract text
+        # PSM 6 = Assume a single uniform block of text
+        # --oem 3 = Default OCR Engine Mode (LSTM neural network)
+        custom_config = r'--oem 3 --psm 6'
+        extracted_text = pytesseract.image_to_string(pil_img, config=custom_config)
         
-        # Join all text pieces with space
-        full_text = " ".join(extracted_texts)
+        # Clean up the text
+        extracted_text = " ".join(extracted_text.split())
         
-        # Clean up extra spaces
-        full_text = " ".join(full_text.split())
-        
-        return full_text if full_text.strip() else "No text detected in image"
+        return extracted_text if extracted_text.strip() else "No text detected in image"
         
     except Exception as e:
         print(f"OCR Error: {str(e)}")
