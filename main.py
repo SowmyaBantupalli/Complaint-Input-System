@@ -110,6 +110,13 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         Extracted text string
     """
     try:
+        # Check if Tesseract is available
+        try:
+            pytesseract.get_tesseract_version()
+        except Exception:
+            # Tesseract not installed - return informative error
+            return "TESSERACT_NOT_INSTALLED"
+        
         # Preprocess the image for better OCR accuracy
         preprocessed_img = preprocess_image(image_bytes)
         
@@ -129,7 +136,7 @@ def extract_text_from_image(image_bytes: bytes) -> str:
         
     except Exception as e:
         print(f"OCR Error: {str(e)}")
-        return f"Error processing image: {str(e)}"
+        return f"OCR_ERROR: {str(e)}"
 
 
 # MODULE 4: Legal Section (BNS/BNSS) Classification
@@ -305,11 +312,25 @@ async def handle_analyze(
         # Extract text using OCR with preprocessing
         text_to_analyze = extract_text_from_image(image_bytes)
         
-        # Check if OCR successfully extracted text
-        if text_to_analyze.startswith("Error") or text_to_analyze == "No text detected in image":
+        # Check for Tesseract installation issues
+        if text_to_analyze == "TESSERACT_NOT_INSTALLED":
             return {
                 "status": "error",
-                "detail": text_to_analyze
+                "detail": "OCR is not available on this server. Tesseract OCR is not installed. Please use Docker deployment or deploy to a platform that supports system packages. For now, please use text input instead of image upload."
+            }
+        
+        # Check if OCR encountered errors
+        if text_to_analyze.startswith("OCR_ERROR"):
+            return {
+                "status": "error",
+                "detail": f"OCR processing failed: {text_to_analyze.replace('OCR_ERROR: ', '')}. Please try again or use text input."
+            }
+        
+        # Check if no text was detected
+        if text_to_analyze == "No text detected in image":
+            return {
+                "status": "error",
+                "detail": "No text detected in image. Please ensure the image contains clear, readable text."
             }
         
         # If extracted text is too short, it might be a bad scan
