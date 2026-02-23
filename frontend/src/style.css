@@ -118,6 +118,67 @@ body::before {
   line-height: 1.6;
 }
 
+.loading-info {
+  margin-top: var(--spacing-lg);
+  text-align: left;
+  border-top: 1px solid var(--gray-200);
+  padding-top: var(--spacing-md);
+}
+
+.loading-info-title {
+  font-weight: 800;
+  color: var(--gray-800);
+  margin-bottom: var(--spacing-sm);
+}
+
+.loading-info-card {
+  width: 100%;
+  text-align: left;
+  border: 1px solid var(--gray-200);
+  background: var(--gray-50);
+  border-radius: 16px;
+  padding: var(--spacing-md);
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.08);
+  animation: flashCardIn 360ms ease-out;
+  cursor: pointer;
+}
+
+.loading-info-card:focus {
+  outline: none;
+}
+
+.loading-info-card:focus-visible {
+  box-shadow:
+    0 10px 24px rgba(17, 24, 39, 0.08),
+    0 0 0 4px rgba(99, 102, 241, 0.16);
+}
+
+.loading-info-card:hover {
+  background: var(--gray-100);
+}
+
+.loading-info-card-title {
+  font-weight: 800;
+  color: var(--gray-900);
+  margin-bottom: var(--spacing-xs);
+}
+
+.loading-info-card-body {
+  color: var(--gray-700);
+  line-height: 1.55;
+}
+
+@keyframes flashCardIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 /* Lightweight 'scientific' loader (no external GIF required) */
 .ai-loader {
   width: 88px;
