@@ -48,10 +48,10 @@ class BNSClassifier:
         try:
             genai.configure(api_key=self.api_key)
             
-            # Use Gemini Pro - most stable model for free tier API keys
-            # Free tier supports: gemini-pro, gemini-1.5-flash (no version suffix)
+            # Use Gemini 1.5 Flash - free tier model (no version suffix needed)
+            # Same API key works for all models - just need correct model name
             self.model = genai.GenerativeModel(
-                model_name="gemini-pro",
+                model_name="gemini-1.5-flash",
                 generation_config={
                     "temperature": 0.2,  # Low temperature for consistent, factual outputs
                     "top_p": 0.8,
