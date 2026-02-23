@@ -1,5 +1,7 @@
 // Result Display Component
 // Shows the analysis results from backend in a clean card format
+import { useState } from "react";
+
 export default function ResultDisplay({ data }) {
   const {
     crime_type,
@@ -16,6 +18,8 @@ export default function ResultDisplay({ data }) {
     extracted_text,
     consistency,
   } = data;
+
+  const [openTooltipSection, setOpenTooltipSection] = useState(null);
 
   const renderValue = (value) => {
     const raw = String(value ?? "").trim();
@@ -47,6 +51,9 @@ export default function ResultDisplay({ data }) {
           return {
             section: String(s.section ?? "").trim(),
             reason: String(s.reason ?? "").trim(),
+            description: String(s.description ?? "").trim(),
+            name: String(s.name ?? "").trim(),
+            chapter: String(s.chapter ?? "").trim(),
           };
         })
         .filter((s) => s && s.section)
@@ -95,12 +102,34 @@ export default function ResultDisplay({ data }) {
       </div>
 
       <div className="sections">
-        <p className="label">BNS Sections (Official CSV)</p>
+        <p className="label">BNS Sections</p>
         {normalizedSections.length > 0 ? (
           <ul className="section-list">
             {normalizedSections.map((s) => (
-              <li key={s.section}>
-                <span className="section-id">Section {s.section}</span>
+              <li key={s.section} className="section-item">
+                <div className="section-head">
+                  <span className="section-id">Section {s.section}</span>
+                  {s.description ? (
+                    <div className={openTooltipSection === s.section ? "section-tooltip is-open" : "section-tooltip"}>
+                      <button
+                        type="button"
+                        className="info-button"
+                        aria-label={`View description for Section ${s.section}`}
+                        aria-expanded={openTooltipSection === s.section}
+                        aria-controls={`section-desc-${s.section}`}
+                        onClick={() => {
+                          setOpenTooltipSection((prev) => (prev === s.section ? null : s.section));
+                        }}
+                      >
+                        <span className="info-dot" aria-hidden="true">i</span>
+                      </button>
+                      <div className="tooltip-body" id={`section-desc-${s.section}`} role="note">
+                        <div className="tooltip-title">Official Description (Dataset)</div>
+                        <div className="tooltip-text">{s.description}</div>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
                 {s.reason ? <span className="section-reason">{s.reason}</span> : null}
               </li>
             ))}

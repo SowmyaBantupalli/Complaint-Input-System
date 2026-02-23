@@ -9,6 +9,8 @@ import google.generativeai as genai
 from typing import Optional, Dict, List, Any
 import json
 import re
+import math
+from collections import Counter, defaultdict
 
 class BNSClassifier:
     """Intelligent complaint classifier using Gemini API and BNS dataset"""
@@ -86,6 +88,13 @@ CONTENT TO FIX:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.bns_data = None
         self._all_section_ids: set[str] = set()
+        self._section_details_by_id: Dict[str, Dict[str, str]] = {}
+
+        # Precomputed similarity structures (CSV-grounded)
+        self._idf: Dict[str, float] = {}
+        self._section_vectors: List[Dict[str, float]] = []
+        self._section_norms: List[float] = []
+
         self.model = None
         self.model_name = None
         self.is_initialized = False
@@ -103,7 +112,7 @@ CONTENT TO FIX:
         """Load BNS sections from CSV file"""
         try:
             csv_path = os.path.join(os.path.dirname(__file__), "data", "bns_sections.csv")
-            self.bns_data = pd.read_csv(csv_path)
+            self.bns_data = pd.read_csv(csv_path).reset_index(drop=True)
             # Precompute normalized fields for fast, consistent matching.
             # All section selection must be grounded in this CSV.
             for col in ["Chapter_name", "Section _name", "Description", "Section"]:
@@ -121,11 +130,183 @@ CONTENT TO FIX:
                 + self.bns_data["Description"].fillna("").astype(str)
             )
             self.bns_data["_search_text"] = searchable.str.lower()
+
+            # Details mapping for fast enrichment (used by API response + tooltips)
+            self._section_details_by_id = {}
+            for _, row in self.bns_data.iterrows():
+                sid = str(row.get("Section", "")).strip()
+                if not sid:
+                    continue
+                self._section_details_by_id[sid] = {
+                    "section": sid,
+                    "name": str(row.get("Section _name", "")).strip(),
+                    "chapter": str(row.get("Chapter_name", "")).strip(),
+                    "description": str(row.get("Description", "")),
+                }
+
+            # Build lightweight TF-IDF-like vectors over (Section name + Description)
+            # for semantic-ish side-by-side similarity without adding heavy dependencies.
+            self._build_section_similarity_index()
             print(f"✅ Loaded {len(self.bns_data)} BNS sections from dataset")
         except Exception as e:
             print(f"❌ Error loading BNS dataset: {e}")
             self.bns_data = None
             self._all_section_ids = set()
+            self._section_details_by_id = {}
+            self._idf = {}
+            self._section_vectors = []
+            self._section_norms = []
+
+    def _tokens_for_similarity(self, text: str) -> List[str]:
+        lowered = (text or "").lower()
+        words = re.findall(r"[a-z]{3,}", lowered)
+        return [w for w in words if w not in self._STOPWORDS]
+
+    def _build_section_similarity_index(self) -> None:
+        """Precompute per-section token weights for fast similarity scoring."""
+        if self.bns_data is None or self.bns_data.empty:
+            self._idf = {}
+            self._section_vectors = []
+            self._section_norms = []
+            return
+
+        docs_tokens: List[List[str]] = []
+        df_counts: Dict[str, int] = defaultdict(int)
+        for _, row in self.bns_data.iterrows():
+            combined = (
+                f"{row.get('Section _name', '')}\n{row.get('Description', '')}"
+            )
+            tokens = self._tokens_for_similarity(str(combined))
+            docs_tokens.append(tokens)
+            for tok in set(tokens):
+                df_counts[tok] += 1
+
+        n_docs = len(docs_tokens)
+        self._idf = {}
+        for tok, df in df_counts.items():
+            # Smooth IDF
+            self._idf[tok] = math.log((n_docs + 1) / (df + 1)) + 1.0
+
+        self._section_vectors = []
+        self._section_norms = []
+        for tokens in docs_tokens:
+            tf = Counter(tokens)
+            weights: Dict[str, float] = {}
+            for tok, cnt in tf.items():
+                idf = self._idf.get(tok)
+                if not idf:
+                    continue
+                # log-scaled TF
+                w = (1.0 + math.log(cnt)) * idf
+                weights[tok] = w
+
+            # Keep top terms to bound memory/time (still grounded in official text)
+            if len(weights) > 140:
+                weights = dict(sorted(weights.items(), key=lambda kv: kv[1], reverse=True)[:140])
+
+            norm = math.sqrt(sum(v * v for v in weights.values())) if weights else 0.0
+            self._section_vectors.append(weights)
+            self._section_norms.append(norm)
+
+    def _semantic_match_sections(
+        self,
+        complaint_text: str,
+        top_n: int = 7,
+        min_score: float = 0.12,
+        source_df: Optional[pd.DataFrame] = None,
+    ) -> List[Dict[str, str]]:
+        """Return multiple CSV-grounded sections by similarity to official description."""
+        if self.bns_data is None or self.bns_data.empty:
+            return []
+        if not complaint_text or not str(complaint_text).strip():
+            return []
+        if not self._section_vectors or not self._section_norms:
+            return []
+
+        # Limit scoring to a narrowed dataframe when provided (still uses official description text)
+        if source_df is None:
+            indices = list(self.bns_data.index)
+        else:
+            indices = list(source_df.index)
+
+        complaint_tokens = self._tokens_for_similarity(str(complaint_text))
+        if not complaint_tokens:
+            return []
+
+        tf = Counter(complaint_tokens)
+        q_weights: Dict[str, float] = {}
+        for tok, cnt in tf.items():
+            idf = self._idf.get(tok)
+            if not idf:
+                continue
+            q_weights[tok] = (1.0 + math.log(cnt)) * idf
+
+        q_norm = math.sqrt(sum(v * v for v in q_weights.values())) if q_weights else 0.0
+        if q_norm == 0.0:
+            return []
+
+        scored: List[tuple[float, int, List[str]]] = []
+        for idx in indices:
+            d_vec = self._section_vectors[idx]
+            d_norm = self._section_norms[idx]
+            if not d_vec or d_norm == 0.0:
+                continue
+
+            dot = 0.0
+            overlaps: List[tuple[float, str]] = []
+            for tok, q_w in q_weights.items():
+                d_w = d_vec.get(tok)
+                if not d_w:
+                    continue
+                prod = q_w * d_w
+                dot += prod
+                overlaps.append((prod, tok))
+
+            if dot <= 0.0:
+                continue
+
+            sim = dot / (q_norm * d_norm)
+            if sim < min_score:
+                continue
+
+            overlaps.sort(reverse=True)
+            top_tokens = [t for _, t in overlaps[:6]]
+            scored.append((sim, idx, top_tokens))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        out: List[Dict[str, str]] = []
+        for sim, idx, top_tokens in scored[:top_n]:
+            sid = str(self.bns_data.loc[idx, "_section_str"]).strip()
+            if not sid:
+                continue
+            sec_name = str(self.bns_data.loc[idx, "Section _name"] or "").strip()
+            keywords = ", ".join(top_tokens)
+            reason = f"Semantic similarity to official description"
+            if sec_name:
+                reason += f" (\"{sec_name}\")"
+            if keywords:
+                reason += f"; matched terms: {keywords}."
+            out.append({"section": sid, "reason": reason, "score": f"{sim:.3f}"})
+
+        return self._validate_bns_sections_against_csv(out)
+
+    def _enrich_sections_with_csv_details(self, sections: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Attach exact CSV name/chapter/description to each section dict."""
+        enriched: List[Dict[str, Any]] = []
+        for item in sections or []:
+            if not isinstance(item, dict):
+                continue
+            sec_id = self._extract_section_id(item.get("section"))
+            if not sec_id or sec_id not in self._section_details_by_id:
+                continue
+            base = dict(item)
+            details = self._section_details_by_id.get(sec_id) or {}
+            base.setdefault("name", details.get("name", ""))
+            base.setdefault("chapter", details.get("chapter", ""))
+            base.setdefault("description", details.get("description", ""))
+            enriched.append(base)
+        return enriched
 
     def _extract_section_id(self, value: Any) -> Optional[str]:
         """Extract a section number from various model/fallback outputs."""
@@ -254,23 +435,25 @@ CONTENT TO FIX:
         if not bns_sections or not isinstance(bns_sections, list):
             return []
 
-        cleaned: List[Dict[str, str]] = []
+        cleaned: List[Dict[str, Any]] = []
         for item in bns_sections:
             if isinstance(item, dict):
                 sec_id = self._extract_section_id(item.get("section"))
                 reason = (item.get("reason") or "").strip()
+                extra = {k: v for k, v in item.items() if k not in {"section", "reason"}}
             else:
                 sec_id = self._extract_section_id(item)
                 reason = ""  # unknown
+                extra = {}
 
             if not sec_id:
                 continue
             if sec_id not in self._all_section_ids:
                 continue
-            cleaned.append({"section": sec_id, "reason": reason})
+            cleaned.append({"section": sec_id, "reason": reason, **extra})
 
         # De-duplicate by section id while preserving order
-        deduped: List[Dict[str, str]] = []
+        deduped: List[Dict[str, Any]] = []
         seen = set()
         for x in cleaned:
             sid = x["section"]
@@ -554,7 +737,29 @@ IMPORTANT JSON RULES:
             if not validated_sections and candidates:
                 # One more targeted retry to pick from CSV-derived candidates.
                 validated_sections = self._retry_sections_only(complaint_text, candidates)
-            classification["bns_sections"] = validated_sections
+
+            # Advanced CSV-grounded semantic matching against section descriptions.
+            # Merge Gemini-selected sections with similarity-ranked sections so we return
+            # multiple relevant sections (not just one) while staying strictly CSV-backed.
+            semantic_matches = self._semantic_match_sections(
+                complaint_text=complaint_text,
+                top_n=7,
+                min_score=0.12,
+            )
+
+            merged: List[Dict[str, Any]] = []
+            merged.extend(validated_sections or [])
+            existing = {self._extract_section_id(x.get("section")) for x in (validated_sections or []) if isinstance(x, dict)}
+            for m in semantic_matches:
+                mid = self._extract_section_id(m.get("section"))
+                if not mid or mid in existing:
+                    continue
+                merged.append(m)
+
+            # Keep output bounded for readability.
+            merged = merged[:10]
+
+            classification["bns_sections"] = self._enrich_sections_with_csv_details(merged)
             
             # Format BNS sections for display
             if classification.get("bns_sections"):
@@ -697,23 +902,16 @@ IMPORTANT JSON RULES:
             except Exception:
                 source_df = self.bns_data
 
-            candidates_df = self._get_candidate_sections(
-                match_text,
-                top_k=8,
-                force_include=force_include,
+            # Semantic-style scoring: compare complaint text against official description text.
+            matched_sections = self._semantic_match_sections(
+                complaint_text=match_text,
+                top_n=7,
+                min_score=0.10,
                 source_df=source_df,
             )
-            if candidates_df is not None and not candidates_df.empty and "_score" in candidates_df.columns:
-                best = candidates_df[candidates_df["_score"] > 0].head(1)
-                for _, row in best.iterrows():
-                    matched_sections.append(
-                        {
-                            "section": str(row.get("Section", "")).strip(),
-                            "reason": str(row.get("Section _name", "")).strip(),
-                        }
-                    )
 
         matched_sections = self._validate_bns_sections_against_csv(matched_sections)
+        matched_sections = self._enrich_sections_with_csv_details(matched_sections)
         if matched_sections:
             predicted_section = "; ".join(
                 [f"Section {s['section']}: {s.get('reason', '').strip()}" for s in matched_sections]
@@ -821,7 +1019,7 @@ IMPORTANT JSON RULES:
         # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
         
-        additional_notes = "⚠️ Basic rule-based classification (Gemini AI not configured). "
+        additional_notes = "Note: Basic rule-based extraction (Gemini AI not configured). "
         if crime_type == "Grievous Hurt":
             additional_notes += "Serious bodily injury - medical attention required. Escalate immediately. "
         additional_notes += "For more accurate extraction, configure GEMINI_API_KEY environment variable."
@@ -864,7 +1062,7 @@ IMPORTANT JSON RULES:
         # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
         
-        additional_notes = "⚠️ Basic rule-based classification (Gemini AI not configured). "
+        additional_notes = "Note: Basic rule-based extraction (Gemini AI not configured). "
         if crime_type == "Theft" and stolen_item == "motorcycle":
             additional_notes += "High-value item stolen - escalate to senior officer. "
         additional_notes += "For more accurate extraction, configure GEMINI_API_KEY environment variable."
@@ -893,21 +1091,10 @@ IMPORTANT JSON RULES:
         Returns:
             Dictionary with section details or None if not found
         """
-        if self.bns_data is None:
+        section_id = str(section_number or "").strip()
+        if not section_id:
             return None
-        
-        section = self.bns_data[self.bns_data['Section'].astype(str) == str(section_number)]
-        
-        if section.empty:
-            return None
-        
-        row = section.iloc[0]
-        return {
-            "section": row['Section'],
-            "name": row['Section _name'],
-            "chapter": row['Chapter_name'],
-            "description": row['Description']
-        }
+        return self._section_details_by_id.get(section_id)
 
 
 # Global classifier instance (initialized on first use)
