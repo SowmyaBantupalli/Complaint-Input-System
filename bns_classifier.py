@@ -246,7 +246,10 @@ OUTPUT FORMAT:
         
         lowered = text.lower()
         
-        # Crime type detection with severity escalation
+        # Initialize default values
+        crime_type = "Unknown"
+        predicted_section = "Section not determined - requires further review"
+        severity = "Low"
         stolen_item = "property"
         
         # Check for Grievous Hurt FIRST (more specific than assault)
@@ -309,9 +312,7 @@ OUTPUT FORMAT:
             crime_type = "Harassment"
             predicted_section = "BNS Section 78 - Criminal Harassment"
             severity = "Medium"
-        else:
-            crime_type = "Unknown"
-            predicted_section = "Section not determined - requires further review"
+        
         # IMPORTANT: Exclude time patterns from location
         location = "Not Specified"
         location_patterns = [
