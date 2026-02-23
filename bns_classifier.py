@@ -734,6 +734,15 @@ IMPORTANT JSON RULES:
                 min_score=0.0,
             )
 
+            used_gemini = bool(validated_sections)
+            used_bm25 = bool(semantic_matches)
+            if used_gemini and used_bm25:
+                classification["bns_section_mapping_method"] = "gemini+bm25"
+            elif used_gemini:
+                classification["bns_section_mapping_method"] = "gemini"
+            else:
+                classification["bns_section_mapping_method"] = "bm25"
+
             merged: List[Dict[str, Any]] = []
             merged.extend(validated_sections or [])
             existing = {self._extract_section_id(x.get("section")) for x in (validated_sections or []) if isinstance(x, dict)}
@@ -903,6 +912,7 @@ IMPORTANT JSON RULES:
             predicted_section = "; ".join(
                 [f"Section {s['section']}: {s.get('reason', '').strip()}" for s in matched_sections]
             )
+        mapping_method = "bm25" if matched_sections else "bm25"
         
         # IMPORTANT: Exclude time patterns from location
         location = "Not Specified"
@@ -1065,7 +1075,8 @@ IMPORTANT JSON RULES:
             "severity": severity,
             "additional_notes": additional_notes,
             "ai_classification": False,
-            "bns_sections": matched_sections if matched_sections else []
+            "bns_sections": matched_sections if matched_sections else [],
+            "bns_section_mapping_method": "bm25",
         }
     
     def get_section_details(self, section_number: str) -> Optional[Dict]:

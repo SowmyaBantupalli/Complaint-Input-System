@@ -124,7 +124,7 @@ export default function ResultDisplay({ data }) {
                         <span className="info-dot" aria-hidden="true">i</span>
                       </button>
                       <div className="tooltip-body" id={`section-desc-${s.section}`} role="note">
-                        <div className="tooltip-title">Official Description (Dataset)</div>
+                        <div className="tooltip-title">Official Description</div>
                         <div className="tooltip-text">{s.description}</div>
                       </div>
                     </div>

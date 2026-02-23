@@ -139,7 +139,11 @@ body::before {
   border-radius: 16px;
   padding: var(--spacing-md);
   box-shadow: 0 10px 24px rgba(17, 24, 39, 0.08);
-  animation: flashCardIn 360ms ease-out;
+  animation: flashCardIn 420ms ease-out;
+  transform: translateZ(0);
+  transform-style: preserve-3d;
+  transition: transform 160ms ease, background 160ms ease, box-shadow 160ms ease;
+  will-change: transform;
   cursor: pointer;
 }
 
@@ -155,6 +159,12 @@ body::before {
 
 .loading-info-card:hover {
   background: var(--gray-100);
+  transform: translateY(-2px) rotateX(1.6deg);
+  box-shadow: 0 14px 30px rgba(17, 24, 39, 0.1);
+}
+
+.loading-info-card:active {
+  transform: translateY(0) scale(0.992) rotateY(1.6deg);
 }
 
 .loading-info-card-title {
@@ -171,11 +181,24 @@ body::before {
 @keyframes flashCardIn {
   from {
     opacity: 0;
-    transform: translateY(8px);
+    transform: perspective(900px) translateY(10px) rotateX(-8deg) scale(0.985);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: perspective(900px) translateY(0) rotateX(0deg) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-info-card {
+    animation: none;
+    transition: none;
+  }
+
+  .loading-info-card:hover,
+  .loading-info-card:active {
+    transform: none;
+    box-shadow: 0 10px 24px rgba(17, 24, 39, 0.08);
   }
 }
 
