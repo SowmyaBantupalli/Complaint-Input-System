@@ -11,6 +11,60 @@ import json
 
 class BNSClassifier:
     """Intelligent complaint classifier using Gemini API and BNS dataset"""
+
+    @staticmethod
+    def _extract_json_block(text: str) -> str:
+        """Extract the most likely JSON object from a model response."""
+        result_text = (text or "").strip()
+
+        # Remove markdown code blocks if present
+        if "```json" in result_text:
+            result_text = result_text.split("```json", 1)[1]
+            result_text = result_text.split("```", 1)[0].strip()
+        elif "```" in result_text:
+            result_text = result_text.split("```", 1)[1]
+            result_text = result_text.split("```", 1)[0].strip()
+
+        # Grab from first '{' to last '}'
+        start = result_text.find("{")
+        end = result_text.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            return result_text[start : end + 1].strip()
+
+        return result_text
+
+    def _repair_json_with_gemini(self, broken_json_text: str) -> Optional[Dict]:
+        """If Gemini returns non-parseable JSON, ask it to repair into strict JSON."""
+        if not self.model:
+            return None
+
+        repair_prompt = f"""You are a strict JSON formatter.
+
+Convert the content below into VALID JSON that matches this schema exactly:
+{{
+  \"crime_type\": \"\",
+  \"location\": \"\",
+  \"date\": \"\",
+  \"time\": \"\",
+  \"persons_involved\": \"\",
+  \"key_event_summary\": \"\",
+  \"bns_sections\": [{{\"section\": \"\", \"reason\": \"\"}}],
+  \"severity\": \"\",
+  \"additional_notes\": \"\"
+}}
+
+Rules:
+- Output ONLY JSON (no markdown, no commentary).
+- Escape any quotes inside strings.
+- Do not include unescaped newlines inside string values; use spaces.
+
+CONTENT TO FIX:
+{broken_json_text}
+"""
+
+        response = self.model.generate_content(repair_prompt)
+        repaired_text = self._extract_json_block(getattr(response, "text", "") or "")
+        return json.loads(repaired_text)
     
     def __init__(self, api_key: Optional[str] = None):
         """
@@ -228,7 +282,10 @@ CRITICAL CLASSIFICATION RULES:
 - Be THOROUGH - read the entire complaint carefully
 
 OUTPUT FORMAT:
-```json
+Return ONLY a single JSON object (no markdown code fences, no commentary) with keys:
+crime_type, location, date, time, persons_involved, key_event_summary, bns_sections, severity, additional_notes.
+
+JSON SCHEMA EXAMPLE:
 {{
     "crime_type": "",
     "location": "",
@@ -236,27 +293,36 @@ OUTPUT FORMAT:
     "time": "",
     "persons_involved": "",
     "key_event_summary": "",
-    "bns_sections": [],
+    "bns_sections": [{{"section": "", "reason": ""}}],
     "severity": "",
     "additional_notes": ""
 }}
-```
+
+IMPORTANT JSON RULES:
+- Use double quotes for all keys/strings.
+- Escape any quotes inside string values.
+- Do not include unescaped newlines inside string values; use spaces.
 """
             
             # Generate response
             response = self.model.generate_content(prompt)
             
-            # Extract JSON from response
-            result_text = response.text.strip()
-            
-            # Remove markdown code blocks if present
-            if "```json" in result_text:
-                result_text = result_text.split("```json")[1].split("```")[0].strip()
-            elif "```" in result_text:
-                result_text = result_text.split("```")[1].split("```")[0].strip()
-            
-            # Parse JSON
-            classification = json.loads(result_text)
+            # Extract and parse JSON from response
+            result_text = self._extract_json_block(getattr(response, "text", "") or "")
+            try:
+                classification = json.loads(result_text)
+            except json.JSONDecodeError as e:
+                print(f"⚠️ JSON parsing error: {e}")
+                print(f"Response text: {result_text[:400]}")
+                # Attempt to repair JSON using Gemini (single extra call)
+                try:
+                    repaired = self._repair_json_with_gemini(result_text)
+                    if repaired is None:
+                        raise
+                    classification = repaired
+                except Exception as repair_error:
+                    print(f"⚠️ JSON repair failed: {repair_error}")
+                    return self._fallback_classification(complaint_text)
             
             # Format BNS sections for display
             if classification.get("bns_sections"):
@@ -274,11 +340,6 @@ OUTPUT FORMAT:
             classification["ai_classification"] = True
             
             return classification
-            
-        except json.JSONDecodeError as e:
-            print(f"⚠️ JSON parsing error: {e}")
-            print(f"Response text: {result_text[:200]}")
-            return self._fallback_classification(complaint_text)
             
         except Exception as e:
             print(f"⚠️ Gemini classification error: {e}")
