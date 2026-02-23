@@ -12,34 +12,49 @@ export default function App() {
   // State: stores error messages
   const [error, setError] = useState("");
 
+  const isLoading = status === "loading";
+
   return (
-    <div className="app-shell">
-      <header>
-        <div className="eyebrow">AI-Powered System</div>
-        <h1>Complaint Analyzer</h1>
-        <p>AI-based legal complaint analysis with BNS section classification</p>
-      </header>
+    <div className={isLoading ? "app-shell app-shell-loading" : "app-shell"}>
+      <div className="app-content">
+        <header>
+          <div className="eyebrow">Complaint Intake</div>
+          <h1>AI Complaint Analysis</h1>
+          <p>Complaint analysis with BNS section identification.</p>
+        </header>
 
-      {/* Complaint input form - handles user input and API calls */}
-      <ComplaintForm
-        onStart={() => {
-          setStatus("loading");
-          setError("");
-        }}
-        onResult={(result) => {
-          setAnalysis(result);
-          setStatus("done");
-        }}
-        onError={(message) => {
-          setError(message);
-          setStatus("error");
-        }}
-      />
+        {/* Complaint input form - handles user input and API calls */}
+        <ComplaintForm
+          isLoading={isLoading}
+          onStart={() => {
+            setAnalysis(null);
+            setStatus("loading");
+            setError("");
+          }}
+          onResult={(result) => {
+            setAnalysis(result);
+            setStatus("done");
+          }}
+          onError={(message) => {
+            setError(message);
+            setStatus("error");
+          }}
+        />
 
-      {/* Conditional rendering based on status */}
-      {status === "loading" && <p className="status">Sending complaint…</p>}
-      {error && <p className="status status-error">{error}</p>}
-      {analysis && <ResultDisplay data={analysis} />}
+        {/* Conditional rendering based on status */}
+        {error && <p className="status status-error">{error}</p>}
+        {analysis && <ResultDisplay data={analysis} />}
+      </div>
+
+      {isLoading ? (
+        <div className="loading-overlay" role="status" aria-live="polite" aria-busy="true">
+          <div className="loading-card">
+            <div className="ai-loader" aria-hidden="true" />
+            <h2>Analyzing with AI</h2>
+            <p>The system is structuring the complaint and identifying relevant BNS sections. Please wait.</p>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

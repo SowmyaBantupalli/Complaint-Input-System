@@ -2,7 +2,7 @@ import { useState } from "react";
 
 // MODULE 1: Complaint Input Form Component
 // Handles user input (text or image) and sends to backend API
-export default function ComplaintForm({ onStart, onResult, onError }) {
+export default function ComplaintForm({ onStart, onResult, onError, isLoading = false }) {
   // State management for form inputs
   const [complaint, setComplaint] = useState("");
   const [file, setFile] = useState(null);
@@ -25,7 +25,7 @@ export default function ComplaintForm({ onStart, onResult, onError }) {
     
     // Validation: ensure at least one input is provided
     if (!complaint && !file) {
-      onError("Write a complaint or upload an image before submitting.");
+      onError("Please enter the complaint details or upload an image of Written complaint.");
       return;
     }
 
@@ -47,7 +47,7 @@ export default function ComplaintForm({ onStart, onResult, onError }) {
 
       // Check for errors
       if (!response.ok) {
-        throw new Error(payload.detail || "Unable to analyze right now.");
+        throw new Error(payload.detail || "Unable to process the request at this time.");
       }
 
       // Success: pass result to parent component
@@ -61,25 +61,29 @@ export default function ComplaintForm({ onStart, onResult, onError }) {
   return (
     <form className="form-card" onSubmit={handleSubmit}>
       <label>
-        Complaint story
+        Complaint Details
         <textarea
           value={complaint}
           onChange={(event) => setComplaint(event.target.value)}
-          placeholder="Describe what happened"
-          rows={5}
+          placeholder="Provide a clear description of the incident (who, what, where, and when)."
+          rows={7}
+          disabled={isLoading}
         />
       </label>
 
       <label className="file-input">
-        Optional image
+        Supporting Document (Image)
         <input
           type="file"
           accept="image/*"
           onChange={(event) => setFile(event.target.files?.[0] ?? null)}
+          disabled={isLoading}
         />
       </label>
 
-      <button type="submit">Analyze complaint</button>
+      <button type="submit" disabled={isLoading}>
+        {isLoading ? "Analyzing with AI..." : "Submit for Analysis"}
+      </button>
     </form>
   );
 }
