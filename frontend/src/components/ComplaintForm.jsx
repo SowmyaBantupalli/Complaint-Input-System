@@ -71,6 +71,10 @@ export default function ComplaintForm({ onStart, onResult, onError, isLoading = 
         />
       </label>
 
+      <p className="form-hint">
+        If both typed details and an image are provided, the system will verify that they refer to the same complaint.
+      </p>
+
       <label className="file-input">
         Supporting Document (Image)
         <input

@@ -14,7 +14,30 @@ export default function ResultDisplay({ data }) {
     bns_sections,
     ai_powered,
     extracted_text,
+    consistency,
   } = data;
+
+  const renderValue = (value) => {
+    const raw = String(value ?? "").trim();
+    if (!raw) return <span className="value value-muted">Not available</span>;
+
+    const parts = raw
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+
+    if (parts.length >= 2) {
+      return (
+        <ul className="value-list">
+          {parts.map((p) => (
+            <li key={p}>{p}</li>
+          ))}
+        </ul>
+      );
+    }
+
+    return <span className="value">{raw}</span>;
+  };
 
   const normalizedSections = Array.isArray(bns_sections)
     ? bns_sections
@@ -37,29 +60,32 @@ export default function ResultDisplay({ data }) {
         <span className={ai_powered ? "pill pill-success" : "pill pill-muted"}>
           {ai_powered ? "AI-assisted" : "Standard"}
         </span>
+        {consistency?.typed_provided && consistency?.image_provided && consistency?.matched === true ? (
+          <span className="pill pill-success">Inputs verified</span>
+        ) : null}
         {severity ? <span className="pill pill-accent">Severity: {severity}</span> : null}
       </div>
 
-      <div className="result-grid">
-        <div>
-          <p className="label">Crime Type</p>
-          <p className="value">{crime_type}</p>
+      <div className="result-list">
+        <div className="result-item">
+          <div className="label">Crime Type</div>
+          <div className="value-block">{renderValue(crime_type)}</div>
         </div>
-        <div>
-          <p className="label">Location</p>
-          <p className="value">{location}</p>
+        <div className="result-item">
+          <div className="label">Location</div>
+          <div className="value-block">{renderValue(location)}</div>
         </div>
-        <div>
-          <p className="label">Date</p>
-          <p className="value">{date}</p>
+        <div className="result-item">
+          <div className="label">Date</div>
+          <div className="value-block">{renderValue(date)}</div>
         </div>
-        <div>
-          <p className="label">Time</p>
-          <p className="value">{time}</p>
+        <div className="result-item">
+          <div className="label">Time</div>
+          <div className="value-block">{renderValue(time)}</div>
         </div>
-        <div>
-          <p className="label">Persons Involved</p>
-          <p className="value">{persons_involved}</p>
+        <div className="result-item">
+          <div className="label">Persons Involved</div>
+          <div className="value-block">{renderValue(persons_involved)}</div>
         </div>
       </div>
 

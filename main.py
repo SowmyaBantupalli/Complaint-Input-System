@@ -7,6 +7,7 @@ from fastapi import FastAPI, Form, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import re
+from difflib import SequenceMatcher
 import pytesseract
 import cv2
 import numpy as np
@@ -96,6 +97,45 @@ def check_tesseract_available() -> bool:
         return True
     except:
         return False
+
+
+def _normalize_for_similarity(text: str) -> str:
+    """Normalize text for a rough similarity comparison (OCR vs typed)."""
+    if not text:
+        return ""
+    lowered = text.lower()
+    # Keep letters/numbers, normalize whitespace
+    lowered = re.sub(r"[^a-z0-9\s]", " ", lowered)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    return lowered
+
+
+def _token_set(text: str) -> set[str]:
+    normalized = _normalize_for_similarity(text)
+    tokens = {t for t in normalized.split() if len(t) >= 4}
+    return tokens
+
+
+def _compute_text_similarity(a: str, b: str) -> float:
+    """Compute a similarity score in [0, 1] for two texts."""
+    a_norm = _normalize_for_similarity(a)
+    b_norm = _normalize_for_similarity(b)
+    if not a_norm or not b_norm:
+        return 0.0
+
+    seq_ratio = SequenceMatcher(None, a_norm, b_norm).ratio()
+
+    a_tokens = _token_set(a_norm)
+    b_tokens = _token_set(b_norm)
+    if not a_tokens or not b_tokens:
+        jaccard = 0.0
+    else:
+        inter = len(a_tokens & b_tokens)
+        union = len(a_tokens | b_tokens)
+        jaccard = inter / union if union else 0.0
+
+    # Weighted blend (SequenceMatcher handles OCR noise fairly well; Jaccard adds keyword overlap signal)
+    return (0.65 * seq_ratio) + (0.35 * jaccard)
 
 
 # MODULE 2: Image Preprocessing for OCR
@@ -211,6 +251,9 @@ async def handle_analyze(
     Returns:
     - Structured JSON with crime classification, BNS sections, and extracted details
     """
+    typed_text = (complaint or "").strip()
+    extracted_text = None
+
     # MODULE 2: Real OCR Implementation
     if image:
         # Read image file bytes
@@ -227,10 +270,10 @@ async def handle_analyze(
             )
         
         # Extract text using OCR with preprocessing
-        text_to_analyze = extract_text_from_image(image_bytes)
+        extracted_text = extract_text_from_image(image_bytes)
         
         # Check for Tesseract installation issues
-        if text_to_analyze == "TESSERACT_NOT_INSTALLED":
+        if extracted_text == "TESSERACT_NOT_INSTALLED":
             return JSONResponse(
                 status_code=503,
                 content={
@@ -240,17 +283,17 @@ async def handle_analyze(
             )
         
         # Check if OCR encountered errors
-        if text_to_analyze.startswith("OCR_ERROR"):
+        if extracted_text.startswith("OCR_ERROR"):
             return JSONResponse(
                 status_code=500,
                 content={
                     "status": "error",
-                    "detail": f"OCR processing failed: {text_to_analyze.replace('OCR_ERROR: ', '')}. Please try again or use text input."
+                    "detail": f"OCR processing failed: {extracted_text.replace('OCR_ERROR: ', '')}. Please try again or use text input."
                 }
             )
         
         # Check if no text was detected
-        if text_to_analyze == "No text detected in image":
+        if extracted_text == "No text detected in image":
             return JSONResponse(
                 status_code=400,
                 content={
@@ -260,7 +303,7 @@ async def handle_analyze(
             )
         
         # If extracted text is too short, it might be a bad scan
-        if len(text_to_analyze.strip()) < 10:
+        if len(extracted_text.strip()) < 10:
             return JSONResponse(
                 status_code=400,
                 content={
@@ -268,17 +311,61 @@ async def handle_analyze(
                     "detail": "Could not extract enough text from image. Please ensure the image is clear and contains readable text."
                 }
             )
-            
-    elif complaint:
-        text_to_analyze = complaint
-    else:
+
+    if not typed_text and not extracted_text:
         return JSONResponse(
             status_code=400,
             content={
                 "status": "error",
-                "detail": "Provide complaint text or image."
+                "detail": "Please provide complaint text or upload an image."
             }
         )
+
+    # If both typed text and image are provided, verify they refer to the same complaint.
+    consistency = {
+        "typed_provided": bool(typed_text),
+        "image_provided": bool(extracted_text),
+        "match_score": None,
+        "matched": None,
+    }
+
+    if typed_text and extracted_text:
+        # Only enforce mismatch if both inputs are substantive; allow short typed summaries.
+        typed_tokens = _token_set(typed_text)
+        ocr_tokens = _token_set(extracted_text)
+        is_substantive = (len(typed_text) >= 60 and len(extracted_text) >= 60 and len(typed_tokens) >= 8 and len(ocr_tokens) >= 8)
+
+        score = _compute_text_similarity(typed_text, extracted_text)
+        consistency["match_score"] = round(score, 3)
+
+        # Conservative thresholds to avoid false mismatches with noisy OCR
+        matched = True
+        if is_substantive:
+            matched = score >= 0.45
+
+        consistency["matched"] = matched
+
+        if not matched:
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "status": "error",
+                    "detail": "The typed complaint details do not appear to correspond to the attached written complaint. Please ensure both inputs describe the same incident, or submit only one input.",
+                    "consistency": consistency,
+                },
+            )
+
+        # Combine both for analysis as a whole (keep typed text first; append OCR text).
+        text_to_analyze = (
+            f"Typed complaint details:\n{typed_text}\n\n"
+            f"Extracted text from attached image:\n{extracted_text}"
+        )
+    elif extracted_text:
+        text_to_analyze = extracted_text
+        consistency["matched"] = None
+    else:
+        text_to_analyze = typed_text
+        consistency["matched"] = None
 
     # MODULE 3: AI-Powered Classification using Gemini and BNS dataset
     try:
@@ -288,7 +375,8 @@ async def handle_analyze(
         # Return success status with analysis results
         return {
             "status": "ok",
-            "extracted_text": text_to_analyze if image else None,
+            "extracted_text": extracted_text if image else None,
+            "consistency": consistency,
             "ai_powered": analysis.get("ai_classification", False),
             **analysis
         }
