@@ -83,6 +83,7 @@ async def health_check():
     return {
         "status": "healthy",
         "gemini_api": "active" if classifier.is_initialized else "not configured",
+        "gemini_model": classifier.model_name if getattr(classifier, "model_name", None) else None,
         "bns_dataset": "loaded" if classifier.bns_data is not None else "error",
         "ocr_engine": "tesseract" if check_tesseract_available() else "unavailable"
     }

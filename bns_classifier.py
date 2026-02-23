@@ -22,6 +22,7 @@ class BNSClassifier:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.bns_data = None
         self.model = None
+        self.model_name = None
         self.is_initialized = False
         
         # Load BNS dataset
@@ -47,20 +48,64 @@ class BNSClassifier:
         """Configure Gemini API"""
         try:
             genai.configure(api_key=self.api_key)
-            
-            # Use Gemini 1.5 Flash - free tier model (no version suffix needed)
-            # Same API key works for all models - just need correct model name
-            self.model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash",
-                generation_config={
-                    "temperature": 0.2,  # Low temperature for consistent, factual outputs
-                    "top_p": 0.8,
-                    "top_k": 40,
-                    "max_output_tokens": 2048,
-                }
-            )
-            self.is_initialized = True
-            print("✅ Gemini API initialized successfully")
+
+            # Different API keys / regions / API versions can expose different model IDs.
+            # To avoid hardcoding a model that returns 404, discover available models and
+            # pick the best one that supports generateContent.
+            discovered_model_ids: list[str] = []
+            try:
+                for m in genai.list_models():
+                    supported = getattr(m, "supported_generation_methods", None) or []
+                    if "generateContent" in supported:
+                        model_id = getattr(m, "name", "") or ""
+                        if model_id:
+                            # API returns names like "models/gemini-..."; GenerativeModel
+                            # expects the short ID (e.g., "gemini-1.5-flash").
+                            discovered_model_ids.append(model_id.split("/")[-1])
+            except Exception as e:
+                print(f"⚠️ Could not list Gemini models: {e}")
+
+            # Prefer fast/cheap models first, then any other available model.
+            preferred = [
+                "gemini-1.5-flash",
+                "gemini-1.5-flash-latest",
+                "gemini-1.5-pro",
+                "gemini-1.5-pro-latest",
+                "gemini-pro",
+            ]
+
+            candidate_ids = []
+            if discovered_model_ids:
+                # keep ordering by preference if present, then append any remaining discovered
+                for p in preferred:
+                    if p in discovered_model_ids and p not in candidate_ids:
+                        candidate_ids.append(p)
+                for mid in discovered_model_ids:
+                    if mid not in candidate_ids:
+                        candidate_ids.append(mid)
+            else:
+                candidate_ids = preferred
+
+            last_error = None
+            for candidate in candidate_ids:
+                try:
+                    self.model = genai.GenerativeModel(
+                        model_name=candidate,
+                        generation_config={
+                            "temperature": 0.2,  # Low temperature for consistent, factual outputs
+                            "top_p": 0.8,
+                            "top_k": 40,
+                            "max_output_tokens": 2048,
+                        },
+                    )
+                    self.model_name = candidate
+                    self.is_initialized = True
+                    print(f"✅ Gemini API initialized successfully (model={candidate})")
+                    return
+                except Exception as e:
+                    last_error = e
+
+            raise RuntimeError(f"No compatible Gemini model found. Last error: {last_error}")
         except Exception as e:
             print(f"❌ Error initializing Gemini: {e}")
             self.is_initialized = False
