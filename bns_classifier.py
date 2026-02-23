@@ -88,12 +88,15 @@ CONTENT TO FIX:
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.bns_data = None
         self._all_section_ids: set[str] = set()
-        self._section_details_by_id: Dict[str, Dict[str, str]] = {}
+        # Map section id -> row index (avoids duplicating long descriptions in memory)
+        self._section_row_by_id: Dict[str, int] = {}
 
-        # Precomputed similarity structures (CSV-grounded)
-        self._idf: Dict[str, float] = {}
-        self._section_vectors: List[Dict[str, float]] = []
-        self._section_norms: List[float] = []
+        # Precomputed BM25 structures (CSV-grounded)
+        self._bm25_df: Dict[str, int] = {}
+        self._bm25_idf: Dict[str, float] = {}
+        self._bm25_doc_tf: List[Dict[str, int]] = []
+        self._bm25_doc_len: List[int] = []
+        self._bm25_avgdl: float = 0.0
 
         self.model = None
         self.model_name = None
@@ -131,96 +134,90 @@ CONTENT TO FIX:
             )
             self.bns_data["_search_text"] = searchable.str.lower()
 
-            # Details mapping for fast enrichment (used by API response + tooltips)
-            self._section_details_by_id = {}
-            for _, row in self.bns_data.iterrows():
+            # Keep only row indices for details (to minimize memory use)
+            self._section_row_by_id = {}
+            for idx, row in self.bns_data.iterrows():
                 sid = str(row.get("Section", "")).strip()
                 if not sid:
                     continue
-                self._section_details_by_id[sid] = {
-                    "section": sid,
-                    "name": str(row.get("Section _name", "")).strip(),
-                    "chapter": str(row.get("Chapter_name", "")).strip(),
-                    "description": str(row.get("Description", "")),
-                }
+                self._section_row_by_id[sid] = int(idx)
 
-            # Build lightweight TF-IDF-like vectors over (Section name + Description)
-            # for semantic-ish side-by-side similarity without adding heavy dependencies.
-            self._build_section_similarity_index()
+            # Build BM25 index over (Section name + Description) for local semantic-ish matching.
+            self._build_bm25_index()
             print(f"✅ Loaded {len(self.bns_data)} BNS sections from dataset")
         except Exception as e:
             print(f"❌ Error loading BNS dataset: {e}")
             self.bns_data = None
             self._all_section_ids = set()
-            self._section_details_by_id = {}
-            self._idf = {}
-            self._section_vectors = []
-            self._section_norms = []
+            self._section_row_by_id = {}
+            self._bm25_df = {}
+            self._bm25_idf = {}
+            self._bm25_doc_tf = []
+            self._bm25_doc_len = []
+            self._bm25_avgdl = 0.0
 
     def _tokens_for_similarity(self, text: str) -> List[str]:
         lowered = (text or "").lower()
         words = re.findall(r"[a-z]{3,}", lowered)
         return [w for w in words if w not in self._STOPWORDS]
 
-    def _build_section_similarity_index(self) -> None:
-        """Precompute per-section token weights for fast similarity scoring."""
+    def _build_bm25_index(self) -> None:
+        """Build a compact BM25 index over official section name + description."""
         if self.bns_data is None or self.bns_data.empty:
-            self._idf = {}
-            self._section_vectors = []
-            self._section_norms = []
+            self._bm25_df = {}
+            self._bm25_idf = {}
+            self._bm25_doc_tf = []
+            self._bm25_doc_len = []
+            self._bm25_avgdl = 0.0
             return
 
-        docs_tokens: List[List[str]] = []
+        doc_tf: List[Dict[str, int]] = []
+        doc_len: List[int] = []
         df_counts: Dict[str, int] = defaultdict(int)
+
         for _, row in self.bns_data.iterrows():
-            combined = (
-                f"{row.get('Section _name', '')}\n{row.get('Description', '')}"
-            )
+            combined = f"{row.get('Section _name', '')}\n{row.get('Description', '')}"
             tokens = self._tokens_for_similarity(str(combined))
-            docs_tokens.append(tokens)
-            for tok in set(tokens):
+            tf = Counter(tokens)
+            # Keep only the top terms by frequency to bound memory
+            if len(tf) > 220:
+                tf = Counter(dict(tf.most_common(220)))
+
+            tf_dict = dict(tf)
+            doc_tf.append(tf_dict)
+            dl = sum(tf_dict.values())
+            doc_len.append(dl)
+            for tok in tf_dict.keys():
                 df_counts[tok] += 1
 
-        n_docs = len(docs_tokens)
-        self._idf = {}
+        n_docs = len(doc_tf)
+        avgdl = (sum(doc_len) / n_docs) if n_docs else 0.0
+
+        self._bm25_df = dict(df_counts)
+        self._bm25_doc_tf = doc_tf
+        self._bm25_doc_len = doc_len
+        self._bm25_avgdl = avgdl
+
+        # Okapi BM25 IDF (smoothed)
+        idf: Dict[str, float] = {}
         for tok, df in df_counts.items():
-            # Smooth IDF
-            self._idf[tok] = math.log((n_docs + 1) / (df + 1)) + 1.0
-
-        self._section_vectors = []
-        self._section_norms = []
-        for tokens in docs_tokens:
-            tf = Counter(tokens)
-            weights: Dict[str, float] = {}
-            for tok, cnt in tf.items():
-                idf = self._idf.get(tok)
-                if not idf:
-                    continue
-                # log-scaled TF
-                w = (1.0 + math.log(cnt)) * idf
-                weights[tok] = w
-
-            # Keep top terms to bound memory/time (still grounded in official text)
-            if len(weights) > 140:
-                weights = dict(sorted(weights.items(), key=lambda kv: kv[1], reverse=True)[:140])
-
-            norm = math.sqrt(sum(v * v for v in weights.values())) if weights else 0.0
-            self._section_vectors.append(weights)
-            self._section_norms.append(norm)
+            # log( (N - df + 0.5) / (df + 0.5) + 1)
+            idf[tok] = math.log(((n_docs - df + 0.5) / (df + 0.5)) + 1.0)
+        self._bm25_idf = idf
 
     def _semantic_match_sections(
         self,
         complaint_text: str,
         top_n: int = 7,
-        min_score: float = 0.12,
+        min_score: float = 0.0,
         source_df: Optional[pd.DataFrame] = None,
     ) -> List[Dict[str, str]]:
-        """Return multiple CSV-grounded sections by similarity to official description."""
+        """Return multiple CSV-grounded sections by BM25 similarity to official description."""
         if self.bns_data is None or self.bns_data.empty:
             return []
         if not complaint_text or not str(complaint_text).strip():
             return []
-        if not self._section_vectors or not self._section_norms:
+        if not self._bm25_doc_tf or not self._bm25_idf:
             return []
 
         # Limit scoring to a narrowed dataframe when provided (still uses official description text)
@@ -229,65 +226,55 @@ CONTENT TO FIX:
         else:
             indices = list(source_df.index)
 
-        complaint_tokens = self._tokens_for_similarity(str(complaint_text))
-        if not complaint_tokens:
+        q_tokens = self._tokens_for_similarity(str(complaint_text))
+        if not q_tokens:
             return []
+        q_unique = list(dict.fromkeys(q_tokens))
 
-        tf = Counter(complaint_tokens)
-        q_weights: Dict[str, float] = {}
-        for tok, cnt in tf.items():
-            idf = self._idf.get(tok)
-            if not idf:
-                continue
-            q_weights[tok] = (1.0 + math.log(cnt)) * idf
-
-        q_norm = math.sqrt(sum(v * v for v in q_weights.values())) if q_weights else 0.0
-        if q_norm == 0.0:
-            return []
+        k1 = 1.5
+        b = 0.75
+        avgdl = self._bm25_avgdl or 1.0
 
         scored: List[tuple[float, int, List[str]]] = []
         for idx in indices:
-            d_vec = self._section_vectors[idx]
-            d_norm = self._section_norms[idx]
-            if not d_vec or d_norm == 0.0:
+            tf = self._bm25_doc_tf[idx]
+            dl = self._bm25_doc_len[idx] or 0
+            if not tf or dl <= 0:
                 continue
 
-            dot = 0.0
-            overlaps: List[tuple[float, str]] = []
-            for tok, q_w in q_weights.items():
-                d_w = d_vec.get(tok)
-                if not d_w:
+            score = 0.0
+            token_contrib: List[tuple[float, str]] = []
+            for tok in q_unique:
+                f = tf.get(tok)
+                if not f:
                     continue
-                prod = q_w * d_w
-                dot += prod
-                overlaps.append((prod, tok))
+                idf = self._bm25_idf.get(tok, 0.0)
+                denom = f + k1 * (1.0 - b + b * (dl / avgdl))
+                contrib = idf * ((f * (k1 + 1.0)) / denom)
+                score += contrib
+                token_contrib.append((contrib, tok))
 
-            if dot <= 0.0:
+            if score <= min_score:
                 continue
-
-            sim = dot / (q_norm * d_norm)
-            if sim < min_score:
-                continue
-
-            overlaps.sort(reverse=True)
-            top_tokens = [t for _, t in overlaps[:6]]
-            scored.append((sim, idx, top_tokens))
+            token_contrib.sort(reverse=True)
+            top_tokens = [t for _, t in token_contrib[:6]]
+            scored.append((score, idx, top_tokens))
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
         out: List[Dict[str, str]] = []
-        for sim, idx, top_tokens in scored[:top_n]:
+        for score, idx, top_tokens in scored[:top_n]:
             sid = str(self.bns_data.loc[idx, "_section_str"]).strip()
             if not sid:
                 continue
             sec_name = str(self.bns_data.loc[idx, "Section _name"] or "").strip()
             keywords = ", ".join(top_tokens)
-            reason = f"Semantic similarity to official description"
+            reason = "Similarity to official BNS description"
             if sec_name:
                 reason += f" (\"{sec_name}\")"
             if keywords:
                 reason += f"; matched terms: {keywords}."
-            out.append({"section": sid, "reason": reason, "score": f"{sim:.3f}"})
+            out.append({"section": sid, "reason": reason, "score": f"{score:.3f}"})
 
         return self._validate_bns_sections_against_csv(out)
 
@@ -298,13 +285,13 @@ CONTENT TO FIX:
             if not isinstance(item, dict):
                 continue
             sec_id = self._extract_section_id(item.get("section"))
-            if not sec_id or sec_id not in self._section_details_by_id:
+            row_idx = self._section_row_by_id.get(sec_id) if sec_id else None
+            if row_idx is None or self.bns_data is None:
                 continue
             base = dict(item)
-            details = self._section_details_by_id.get(sec_id) or {}
-            base.setdefault("name", details.get("name", ""))
-            base.setdefault("chapter", details.get("chapter", ""))
-            base.setdefault("description", details.get("description", ""))
+            base.setdefault("name", str(self.bns_data.loc[row_idx, "Section _name"] or "").strip())
+            base.setdefault("chapter", str(self.bns_data.loc[row_idx, "Chapter_name"] or "").strip())
+            base.setdefault("description", str(self.bns_data.loc[row_idx, "Description"] or ""))
             enriched.append(base)
         return enriched
 
@@ -744,7 +731,7 @@ IMPORTANT JSON RULES:
             semantic_matches = self._semantic_match_sections(
                 complaint_text=complaint_text,
                 top_n=7,
-                min_score=0.12,
+                min_score=0.0,
             )
 
             merged: List[Dict[str, Any]] = []
@@ -906,7 +893,7 @@ IMPORTANT JSON RULES:
             matched_sections = self._semantic_match_sections(
                 complaint_text=match_text,
                 top_n=7,
-                min_score=0.10,
+                min_score=0.0,
                 source_df=source_df,
             )
 
@@ -1094,7 +1081,18 @@ IMPORTANT JSON RULES:
         section_id = str(section_number or "").strip()
         if not section_id:
             return None
-        return self._section_details_by_id.get(section_id)
+        if self.bns_data is None:
+            return None
+        row_idx = self._section_row_by_id.get(section_id)
+        if row_idx is None:
+            return None
+        row = self.bns_data.loc[row_idx]
+        return {
+            "section": str(row.get("Section", "")).strip(),
+            "name": str(row.get("Section _name", "")).strip(),
+            "chapter": str(row.get("Chapter_name", "")).strip(),
+            "description": str(row.get("Description", "")),
+        }
 
 
 # Global classifier instance (initialized on first use)
