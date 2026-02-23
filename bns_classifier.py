@@ -48,10 +48,10 @@ class BNSClassifier:
         try:
             genai.configure(api_key=self.api_key)
             
-            # Use Gemini 1.5 Flash (free tier, fast, good for structured output)
-            # Using "latest" suffix for automatic version resolution with free tier API
+            # Use Gemini Pro - most stable model for free tier API keys
+            # Free tier supports: gemini-pro, gemini-1.5-flash (no version suffix)
             self.model = genai.GenerativeModel(
-                model_name="gemini-1.5-flash-001",
+                model_name="gemini-pro",
                 generation_config={
                     "temperature": 0.2,  # Low temperature for consistent, factual outputs
                     "top_p": 0.8,
