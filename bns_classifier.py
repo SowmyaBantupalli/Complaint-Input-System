@@ -6,11 +6,21 @@ This module loads the BNS dataset and uses Gemini AI to intelligently classify c
 import os
 import pandas as pd
 import google.generativeai as genai
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 import json
+import re
 
 class BNSClassifier:
     """Intelligent complaint classifier using Gemini API and BNS dataset"""
+
+    _STOPWORDS = {
+        "the", "a", "an", "and", "or", "but", "if", "then", "else", "when", "where", "why", "how",
+        "i", "me", "my", "mine", "we", "our", "ours", "you", "your", "yours", "he", "she", "they",
+        "him", "her", "them", "this", "that", "these", "those", "is", "are", "was", "were", "be",
+        "been", "being", "to", "of", "in", "on", "at", "from", "near", "outside", "inside", "with",
+        "for", "as", "by", "it", "its", "into", "over", "under", "between", "during", "after", "before",
+        "yesterday", "today", "tomorrow", "around", "about",
+    }
 
     @staticmethod
     def _extract_json_block(text: str) -> str:
@@ -75,6 +85,7 @@ CONTENT TO FIX:
         """
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
         self.bns_data = None
+        self._all_section_ids: set[str] = set()
         self.model = None
         self.model_name = None
         self.is_initialized = False
@@ -93,10 +104,181 @@ CONTENT TO FIX:
         try:
             csv_path = os.path.join(os.path.dirname(__file__), "data", "bns_sections.csv")
             self.bns_data = pd.read_csv(csv_path)
+            # Precompute normalized fields for fast, consistent matching.
+            # All section selection must be grounded in this CSV.
+            for col in ["Chapter_name", "Section _name", "Description", "Section"]:
+                if col not in self.bns_data.columns:
+                    raise ValueError(f"Missing required column in BNS CSV: {col}")
+
+            self.bns_data["_section_str"] = self.bns_data["Section"].astype(str).str.strip()
+            self._all_section_ids = set(self.bns_data["_section_str"].tolist())
+
+            searchable = (
+                self.bns_data["Chapter_name"].fillna("").astype(str)
+                + " | "
+                + self.bns_data["Section _name"].fillna("").astype(str)
+                + " | "
+                + self.bns_data["Description"].fillna("").astype(str)
+            )
+            self.bns_data["_search_text"] = searchable.str.lower()
             print(f"✅ Loaded {len(self.bns_data)} BNS sections from dataset")
         except Exception as e:
             print(f"❌ Error loading BNS dataset: {e}")
             self.bns_data = None
+            self._all_section_ids = set()
+
+    def _extract_section_id(self, value: Any) -> Optional[str]:
+        """Extract a section number from various model/fallback outputs."""
+        if value is None:
+            return None
+        if isinstance(value, (int, float)):
+            # float can happen if parsed loosely; cast carefully
+            try:
+                return str(int(value))
+            except Exception:
+                return None
+        text = str(value).strip()
+        if not text:
+            return None
+        m = re.search(r"\b(\d{1,4})\b", text)
+        return m.group(1) if m else None
+
+    def _tokenize_for_match(self, text: str, max_tokens: int = 15) -> List[str]:
+        return self._tokenize_for_match_with_hints(text=text, max_tokens=max_tokens, force_include=None)
+
+    def _tokenize_for_match_with_hints(
+        self, text: str, max_tokens: int = 15, force_include: Optional[List[str]] = None
+    ) -> List[str]:
+        """Tokenize text, ensuring `force_include` tokens are included first."""
+        force_include = [t.lower().strip() for t in (force_include or []) if str(t).strip()]
+
+        tokens: List[str] = []
+        seen = set()
+
+        for t in force_include:
+            if t in seen:
+                continue
+            seen.add(t)
+            tokens.append(t)
+            if len(tokens) >= max_tokens:
+                return tokens
+
+        words = re.findall(r"[a-zA-Z]{4,}", (text or "").lower())
+        for w in words:
+            if w in self._STOPWORDS:
+                continue
+            if w in seen:
+                continue
+            seen.add(w)
+            tokens.append(w)
+            if len(tokens) >= max_tokens:
+                break
+        return tokens
+
+    def _infer_hint_tokens(self, complaint_text: str) -> List[str]:
+        """Heuristic hints to keep CSV matching stable (used for candidates + fallback)."""
+        lowered = (complaint_text or "").lower()
+        hints: List[str] = []
+        if any(k in lowered for k in ["theft", "stolen", "stole", "missing", "robbed", "snatched"]):
+            hints.extend(["theft", "stolen", "property"])
+        if any(k in lowered for k in ["bike", "motorcycle", "scooter", "car", "vehicle"]):
+            hints.extend(["vehicle", "motor"])
+        if any(k in lowered for k in ["fracture", "fractured", "broken", "grievous", "serious injury"]):
+            hints.extend(["grievous", "hurt", "fracture"])
+        if any(k in lowered for k in ["knife", "rod", "stick", "weapon", "blade", "gun", "pistol"]):
+            hints.extend(["dangerous", "weapons", "weapon"])
+        if any(k in lowered for k in ["threat", "threatened", "intimidat", "kill you", "harm you"]):
+            hints.extend(["criminal", "intimidation", "threat"])
+        if any(k in lowered for k in ["fraud", "cheat", "cheated", "scam"]):
+            hints.extend(["cheating", "fraud"])
+        if any(k in lowered for k in ["harass", "harassment", "stalk"]):
+            hints.extend(["harassment"])
+
+        # de-dup preserve order
+        out: List[str] = []
+        seen = set()
+        for h in hints:
+            if h in seen:
+                continue
+            seen.add(h)
+            out.append(h)
+        return out
+
+    def _get_candidate_sections(
+        self,
+        complaint_text: str,
+        top_k: int = 40,
+        force_include: Optional[List[str]] = None,
+        source_df: Optional[pd.DataFrame] = None,
+    ) -> pd.DataFrame:
+        """Return top candidate sections from the CSV for a given complaint."""
+        df = source_df if source_df is not None else self.bns_data
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        tokens = self._tokenize_for_match_with_hints(
+            text=complaint_text,
+            max_tokens=18,
+            force_include=force_include,
+        )
+        if not tokens:
+            return df.head(top_k)
+
+        base = df["_search_text"]
+        # Simple, explainable score: count of token hits in each row.
+        score = pd.Series(0, index=df.index, dtype="int64")
+        for tok in tokens:
+            pattern = rf"\b{re.escape(tok)}\b"
+            score = score + base.str.contains(pattern, regex=True, na=False).astype("int64")
+
+        if int(score.max()) == 0:
+            # If there are no token hits at all, fall back to broad CSV keywords
+            # so we don't accidentally return unrelated early sections.
+            broad = ["theft", "hurt", "grievous", "assault", "intimidation", "cheating", "harassment", "robbery"]
+            broad_patterns = [rf"\b{re.escape(x)}\b" for x in broad]
+            broad_mask = base.str.contains("|".join(broad_patterns), regex=True, na=False)
+            narrowed = df[broad_mask]
+            if not narrowed.empty:
+                df = narrowed
+                base = df["_search_text"]
+                score = pd.Series(0, index=df.index, dtype="int64")
+                for tok in (force_include or broad):
+                    pattern = rf"\b{re.escape(str(tok).lower())}\b"
+                    score = score + base.str.contains(pattern, regex=True, na=False).astype("int64")
+
+        ranked = df.assign(_score=score).sort_values(by=["_score", "Section"], ascending=[False, True])
+        return ranked.head(top_k)
+
+    def _validate_bns_sections_against_csv(self, bns_sections: Any) -> List[Dict[str, str]]:
+        """Keep only sections that exist in bns_sections.csv."""
+        if not bns_sections or not isinstance(bns_sections, list):
+            return []
+
+        cleaned: List[Dict[str, str]] = []
+        for item in bns_sections:
+            if isinstance(item, dict):
+                sec_id = self._extract_section_id(item.get("section"))
+                reason = (item.get("reason") or "").strip()
+            else:
+                sec_id = self._extract_section_id(item)
+                reason = ""  # unknown
+
+            if not sec_id:
+                continue
+            if sec_id not in self._all_section_ids:
+                continue
+            cleaned.append({"section": sec_id, "reason": reason})
+
+        # De-duplicate by section id while preserving order
+        deduped: List[Dict[str, str]] = []
+        seen = set()
+        for x in cleaned:
+            sid = x["section"]
+            if sid in seen:
+                continue
+            seen.add(sid)
+            deduped.append(x)
+        return deduped
     
     def _initialize_gemini(self):
         """Configure Gemini API"""
@@ -164,7 +346,7 @@ CONTENT TO FIX:
             print(f"❌ Error initializing Gemini: {e}")
             self.is_initialized = False
     
-    def _build_bns_context(self, max_sections: int = 50) -> str:
+    def _build_bns_context(self, complaint_text: str = "", max_sections: int = 50) -> str:
         """
         Build a condensed BNS context for the prompt
         
@@ -176,22 +358,15 @@ CONTENT TO FIX:
         """
         if self.bns_data is None or self.bns_data.empty:
             return "BNS dataset not available"
-        
-        # Focus on criminal offense sections (typically chapters 5-23 in BNS)
-        # Filter relevant chapters for common crimes
-        relevant_chapters = ["OF OFFENCES", "OF CRIMES", "THEFT", "ASSAULT", 
-                            "CRIMINAL", "VIOLENCE", "THREAT", "ROBBERY", 
-                            "BURGLARY", "HARASSMENT", "FRAUD", "HURT",
-                            "WRONGFUL", "CHEATING", "MISCHIEF"]
-        
-        # Filter sections that contain relevant keywords
-        filtered_data = self.bns_data[
-            self.bns_data['Chapter_name'].str.upper().str.contains('|'.join(relevant_chapters), na=False) |
-            self.bns_data['Section _name'].str.contains('theft|assault|threat|robbery|hurt|harassment|fraud|murder|rape|kidnap|extortion|criminal|violence', case=False, na=False)
-        ].head(max_sections)
-        
-        # If filtering gives too few results, use first N sections
-        if len(filtered_data) < 20:
+
+        # Build complaint-specific candidate list from CSV (keeps Gemini grounded).
+        hints = self._infer_hint_tokens(complaint_text)
+        filtered_data = self._get_candidate_sections(
+            complaint_text,
+            top_k=max_sections,
+            force_include=hints,
+        )
+        if filtered_data is None or filtered_data.empty:
             filtered_data = self.bns_data.head(max_sections)
         
         # Build condensed context
@@ -208,6 +383,38 @@ CONTENT TO FIX:
             context_lines.append(section_info)
         
         return "\n".join(context_lines)
+
+    def _retry_sections_only(self, complaint_text: str, candidates: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """Second-pass Gemini call to ONLY select BNS sections from CSV-derived candidates."""
+        if not self.model:
+            return []
+
+        candidate_ids = [c.get("section", "") for c in candidates if c.get("section")]
+        retry_prompt = f"""You are selecting applicable legal sections.
+
+COMPLAINT TEXT:
+{complaint_text}
+
+CANDIDATE SECTIONS (from bns_sections.csv) - you MUST choose ONLY from these section numbers:
+{json.dumps(candidate_ids, ensure_ascii=False)}
+
+Return ONLY JSON (no markdown, no commentary) with this exact schema:
+{{
+  \"bns_sections\": [{{\"section\": \"\", \"reason\": \"\"}}]
+}}
+
+Rules:
+- Every section must be one of the candidate section numbers above.
+- If none apply, return an empty array.
+- Keep reasons short and specific.
+"""
+        response = self.model.generate_content(retry_prompt)
+        result_text = self._extract_json_block(getattr(response, "text", "") or "")
+        try:
+            obj = json.loads(result_text)
+        except Exception:
+            return []
+        return self._validate_bns_sections_against_csv(obj.get("bns_sections"))
     
     def classify_complaint(self, complaint_text: str) -> Dict:
         """
@@ -225,12 +432,32 @@ CONTENT TO FIX:
         
         try:
             # Build BNS context
-            bns_context = self._build_bns_context()
+            hints = self._infer_hint_tokens(complaint_text)
+            candidates_df = self._get_candidate_sections(
+                complaint_text,
+                top_k=40,
+                force_include=hints,
+            )
+            candidates: List[Dict[str, str]] = []
+            if candidates_df is not None and not candidates_df.empty:
+                for _, row in candidates_df.iterrows():
+                    candidates.append(
+                        {
+                            "section": str(row.get("Section", "")).strip(),
+                            "name": str(row.get("Section _name", "")).strip(),
+                            "chapter": str(row.get("Chapter_name", "")).strip(),
+                            "description": str(row.get("Description", ""))[:240].replace("\n", " ").strip(),
+                        }
+                    )
+            bns_context = self._build_bns_context(complaint_text, max_sections=50)
             
-            # Create structured prompt
+            # Create structured prompt (sections MUST come from bns_sections.csv candidates)
             prompt = f"""You are an expert legal analyst specializing in Indian criminal law under the Bharatiya Nyaya Sanhita (BNS).
 
 {bns_context}
+
+CANDIDATE_BNS_SECTIONS (from bns_sections.csv):
+{json.dumps(candidates, ensure_ascii=False)}
 
 COMPLAINT TEXT:
 {complaint_text}
@@ -259,12 +486,10 @@ Analyze the complaint THOROUGHLY and extract ALL mentioned information in strict
 6. **key_event_summary**: Clear 2-3 sentence summary including WHAT happened, WHO was involved, WHERE it happened, injury/damage details
 
 7. **bns_sections**: Applicable BNS sections with specific reasons:
-   - Section 116 for Grievous Hurt (fractures, serious injury with weapon)
-   - Section 115 for simple Assault (no serious injury)
-   - Section 118 for Grievous Hurt with deadly weapons
-   - Section 303 for Theft
-   - Section 351 for Criminal Intimidation
-   - Format: [{{"section": "116", "reason": "Grievous hurt - fracture caused by metal rod"}}]
+    - You MUST choose section numbers ONLY from CANDIDATE_BNS_SECTIONS above.
+    - The section number must exactly match the CSV section number (string).
+    - Format: [{{"section": "<CSV section>", "reason": "<short reason>"}}]
+    - If none apply, return an empty list: []
 
 8. **severity**: 
    - High: Grievous hurt, weapons used, serious injury, high-value theft
@@ -323,6 +548,13 @@ IMPORTANT JSON RULES:
                 except Exception as repair_error:
                     print(f"⚠️ JSON repair failed: {repair_error}")
                     return self._fallback_classification(complaint_text)
+
+            # Enforce: sections must exist in bns_sections.csv
+            validated_sections = self._validate_bns_sections_against_csv(classification.get("bns_sections"))
+            if not validated_sections and candidates:
+                # One more targeted retry to pick from CSV-derived candidates.
+                validated_sections = self._retry_sections_only(complaint_text, candidates)
+            classification["bns_sections"] = validated_sections
             
             # Format BNS sections for display
             if classification.get("bns_sections"):
@@ -349,7 +581,7 @@ IMPORTANT JSON RULES:
         """
         Enhanced rule-based fallback when Gemini is unavailable
         """
-        import re
+        # NOTE: fallback MUST also stay grounded in bns_sections.csv (no hard-coded section IDs).
         
         lowered = text.lower()
         
@@ -377,20 +609,13 @@ IMPORTANT JSON RULES:
         
         if has_grievous_hurt and (is_attack or has_weapon):
             crime_type = "Grievous Hurt"
-            if has_weapon:
-                predicted_section = "BNS Section 118 - Voluntarily Causing Grievous Hurt with Dangerous Weapon"
-                severity = "High"
-            else:
-                predicted_section = "BNS Section 116 - Voluntarily Causing Grievous Hurt"
-                severity = "High"
+            severity = "High"
         elif has_weapon and is_attack:
             crime_type = "Grievous Hurt"
-            predicted_section = "BNS Section 118 - Assault with Dangerous Weapon"
             severity = "High"
         elif "motorcycle" in lowered or "bike" in lowered or "two wheeler" in lowered:
             crime_type = "Theft"
             stolen_item = "motorcycle"
-            predicted_section = "BNS Section 303 - Theft of Motor Vehicle"
             severity = "High"
         elif "theft" in lowered or "stole" in lowered or "stolen" in lowered:
             crime_type = "Theft"
@@ -401,24 +626,98 @@ IMPORTANT JSON RULES:
                 stolen_item = "wallet"
             elif "car" in lowered or "vehicle" in lowered:
                 stolen_item = "vehicle"
-            predicted_section = f"BNS Section 303 - Theft of {stolen_item}"
             severity = "Medium" if stolen_item in ["wallet", "mobile phone"] else "High"
         elif is_attack:
             crime_type = "Assault"
-            predicted_section = "BNS Section 115 - Assault or Criminal Force"
             severity = "Medium"
         elif "threat" in lowered or "threatened" in lowered:
             crime_type = "Threat"
-            predicted_section = "BNS Section 351 - Criminal Intimidation"
             severity = "Medium"
         elif "fraud" in lowered or "cheat" in lowered or "scam" in lowered:
             crime_type = "Fraud"
-            predicted_section = "BNS Section 316 - Cheating"
             severity = "Medium"
         elif "harassment" in lowered or "harass" in lowered:
             crime_type = "Harassment"
-            predicted_section = "BNS Section 78 - Criminal Harassment"
             severity = "Medium"
+
+        # CSV-grounded legal section selection for fallback
+        matched_sections: List[Dict[str, str]] = []
+        if self.bns_data is not None and not self.bns_data.empty:
+            # Add a few crime-type hints to the complaint to improve matching.
+            crime_hints = {
+                "Theft": "theft stolen property motor vehicle",
+                "Grievous Hurt": "grievous hurt fracture weapon injury",
+                "Assault": "assault criminal force hit attack",
+                "Threat": "criminal intimidation threat",
+                "Fraud": "cheating fraud scam",
+                "Harassment": "harassment",
+            }.get(crime_type, "")
+            match_text = f"{text} {crime_hints}".strip()
+            force_include = self._infer_hint_tokens(text)
+            force_include.extend([t for t in crime_hints.split() if t])
+
+            # Crime-type specific narrowing (still strictly CSV-backed).
+            source_df = self.bns_data
+            try:
+                if crime_type == "Theft":
+                    theft_mask = (
+                        source_df["Section _name"].str.contains(r"\btheft\b", case=False, na=False)
+                        | source_df.get("Chapter_subtype", pd.Series([""] * len(source_df))).astype(str).str.contains(
+                            r"\btheft\b", case=False, na=False
+                        )
+                    )
+                    narrowed = source_df[theft_mask]
+                    if not narrowed.empty:
+                        source_df = narrowed
+                        force_include.extend(["theft"])
+                elif crime_type in {"Grievous Hurt", "Assault"}:
+                    hurt_mask = source_df["Section _name"].str.contains(r"hurt|grievous", case=False, na=False)
+                    narrowed = source_df[hurt_mask]
+                    if not narrowed.empty:
+                        source_df = narrowed
+                        force_include.extend(["hurt", "grievous"])
+                elif crime_type == "Threat":
+                    thr_mask = source_df["Section _name"].str.contains(r"intimidation|threat", case=False, na=False)
+                    narrowed = source_df[thr_mask]
+                    if not narrowed.empty:
+                        source_df = narrowed
+                        force_include.extend(["intimidation", "threat"])
+                elif crime_type == "Fraud":
+                    fr_mask = source_df["Section _name"].str.contains(r"cheating|fraud", case=False, na=False)
+                    narrowed = source_df[fr_mask]
+                    if not narrowed.empty:
+                        source_df = narrowed
+                        force_include.extend(["cheating", "fraud"])
+                elif crime_type == "Harassment":
+                    h_mask = source_df["Section _name"].str.contains(r"harass", case=False, na=False)
+                    narrowed = source_df[h_mask]
+                    if not narrowed.empty:
+                        source_df = narrowed
+                        force_include.extend(["harassment"])
+            except Exception:
+                source_df = self.bns_data
+
+            candidates_df = self._get_candidate_sections(
+                match_text,
+                top_k=8,
+                force_include=force_include,
+                source_df=source_df,
+            )
+            if candidates_df is not None and not candidates_df.empty and "_score" in candidates_df.columns:
+                best = candidates_df[candidates_df["_score"] > 0].head(1)
+                for _, row in best.iterrows():
+                    matched_sections.append(
+                        {
+                            "section": str(row.get("Section", "")).strip(),
+                            "reason": str(row.get("Section _name", "")).strip(),
+                        }
+                    )
+
+        matched_sections = self._validate_bns_sections_against_csv(matched_sections)
+        if matched_sections:
+            predicted_section = "; ".join(
+                [f"Section {s['section']}: {s.get('reason', '').strip()}" for s in matched_sections]
+            )
         
         # IMPORTANT: Exclude time patterns from location
         location = "Not Specified"
@@ -581,8 +880,7 @@ IMPORTANT JSON RULES:
             "severity": severity,
             "additional_notes": additional_notes,
             "ai_classification": False,
-            "bns_sections": [{"section": predicted_section.split()[2] if "Section" in predicted_section else "N/A", 
-                             "reason": crime_type}]
+            "bns_sections": matched_sections if matched_sections else []
         }
     
     def get_section_details(self, section_number: str) -> Optional[Dict]:
