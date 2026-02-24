@@ -12,7 +12,6 @@ export default function ResultDisplay({ data }) {
     key_event_summary,
     predicted_section,
     severity,
-    additional_notes,
     bns_sections,
     ai_powered,
     extracted_text,
@@ -20,22 +19,6 @@ export default function ResultDisplay({ data }) {
   } = data;
 
   const [openTooltipSection, setOpenTooltipSection] = useState(null);
-
-  const sanitizedAdditionalNotes = (() => {
-    const raw = String(additional_notes ?? "").trim();
-    if (!raw) return "";
-
-    // Avoid repeating the UI label: "Notes: Note: ..."
-    const withoutPrefix = raw.replace(/^note:\s*/i, "");
-
-    // Never surface technical configuration details in the UI.
-    const techPattern = /(gemini|gemini_api_key|api key|environment variable)/i;
-    if (!techPattern.test(withoutPrefix)) return withoutPrefix;
-
-    const sentences = withoutPrefix.split(/[.!?]\s+/);
-    const kept = sentences.filter((s) => !techPattern.test(s)).join(" ").trim();
-    return kept || "Basic extraction was used; results may be less accurate.";
-  })();
 
   const renderValue = (value) => {
     const raw = String(value ?? "").trim();
@@ -159,12 +142,6 @@ export default function ResultDisplay({ data }) {
         <div className="summary">
           <span className="summary-title">Extracted Text (From Image)</span>
           <div className="summary-body">{extracted_text}</div>
-        </div>
-      ) : null}
-
-      {sanitizedAdditionalNotes ? (
-        <div className="special-note">
-          <strong>Notes:</strong> {sanitizedAdditionalNotes}
         </div>
       ) : null}
     </div>

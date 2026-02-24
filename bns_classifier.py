@@ -1016,7 +1016,7 @@ IMPORTANT JSON RULES:
         # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
         
-        additional_notes_parts = ["Basic extraction was used; results may be less accurate."]
+        additional_notes_parts: List[str] = []
         if crime_type == "Grievous Hurt":
             additional_notes_parts.append("Serious bodily injury reported; medical attention may be required. Escalate if needed.")
         additional_notes = " ".join(additional_notes_parts).strip()
@@ -1059,7 +1059,7 @@ IMPORTANT JSON RULES:
         # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
         
-        additional_notes_parts = ["Basic extraction was used; results may be less accurate."]
+        additional_notes_parts: List[str] = []
         if crime_type == "Theft" and stolen_item == "motorcycle":
             additional_notes_parts.append("High-value item reported stolen; escalate if needed.")
         additional_notes = " ".join(additional_notes_parts).strip()
