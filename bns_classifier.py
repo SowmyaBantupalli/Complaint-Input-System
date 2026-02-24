@@ -1016,10 +1016,10 @@ IMPORTANT JSON RULES:
         # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
         
-        additional_notes = "Note: Basic rule-based extraction (Gemini AI not configured). "
+        additional_notes_parts = ["Basic extraction was used; results may be less accurate."]
         if crime_type == "Grievous Hurt":
-            additional_notes += "Serious bodily injury - medical attention required. Escalate immediately. "
-        additional_notes += "For more accurate extraction, configure GEMINI_API_KEY environment variable."
+            additional_notes_parts.append("Serious bodily injury reported; medical attention may be required. Escalate if needed.")
+        additional_notes = " ".join(additional_notes_parts).strip()
         
         # Enhanced person extraction
         persons_involved = "Not Specified"
@@ -1059,10 +1059,10 @@ IMPORTANT JSON RULES:
         # Full summary
         summary = text[:200] + "..." if len(text) > 200 else text
         
-        additional_notes = "Note: Basic rule-based extraction (Gemini AI not configured). "
+        additional_notes_parts = ["Basic extraction was used; results may be less accurate."]
         if crime_type == "Theft" and stolen_item == "motorcycle":
-            additional_notes += "High-value item stolen - escalate to senior officer. "
-        additional_notes += "For more accurate extraction, configure GEMINI_API_KEY environment variable."
+            additional_notes_parts.append("High-value item reported stolen; escalate if needed.")
+        additional_notes = " ".join(additional_notes_parts).strip()
         
         return {
             "crime_type": crime_type,
